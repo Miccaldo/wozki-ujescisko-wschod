@@ -6,6 +6,8 @@ from googleapiclient.discovery import build
 import datetime
 import re
 from zoneinfo import ZoneInfo
+import streamlit.components.v1 as components
+import time
 
 # --- KONFIGURACJA ---
 st.set_page_config(page_title="Wózki Ujeścisko", page_icon="🛒", layout="centered")
@@ -394,7 +396,8 @@ if not df_users.empty:
     
     # Jeśli nic nie wybrano - zatrzymaj aplikację i pokaż instrukcję
     if selected_user_display is None:
-        st.markdown("## 👋 Witaj w systemie rezerwacji")
+        st.title("Służba na wózku - zapisy 📝")
+        st.caption("Gdańsk Ujeścisko - Wschód")
         st.info("⬅️ Aby rozpocząć, wybierz swoje nazwisko z listy w panelu po lewej stronie.")
         st.stop() # To zatrzymuje ładowanie reszty strony
 
@@ -411,7 +414,19 @@ if not df_users.empty:
     st.session_state['user_name'] = f"{user_data['Imię']} {user_data['Nazwisko']}"
     st.session_state['user_role'] = user_data['Rola']
     
-    st.sidebar.success(f"Zalogowano: {st.session_state['user_name']}")
+    st.toast(f"Zalogowano pomyślnie: {st.session_state['user_name']}", icon="✅")
+
+    close_sidebar_script = """
+    <script>
+        const toggle = window.parent.document.querySelector('[data-testid="stSidebar"]');
+        const toggleBtn = window.parent.document.querySelector('[data-testid="stBaseButton-headerNoPadding"]');
+        if (toggle && toggleBtn && toggle.getAttribute('aria-expanded') === 'true') {
+            console.log('robi')
+            toggleBtn.click();
+        }
+    </script>
+    """
+    components.html(close_sidebar_script, height=0)
 else:
     st.error("Nie udało się załadować listy użytkowników z Arkusza ACL.")
     st.stop()
@@ -430,12 +445,12 @@ choice = st.sidebar.radio("Menu", menu)
 
 if choice == "Nowe Zgłoszenie":
     st.title("Wózki Ujeścisko – Wschód")
-    st.markdown(f"Witaj, **{st.session_state['user_name']}** ({st.session_state['user_email']})")
-
+    st.markdown(f"Cześć, **{st.session_state['user_name']}** ({st.session_state['user_email']})")
+    st.markdown("<br>", unsafe_allow_html=True)
     today = datetime.date.today()
     current_month_name = today.strftime("%B") # Nazwa miesiąca (po angielsku, ale ok)
     
-    with st.expander(f"📅 Twoje dyżury w tym miesiącu ({today.month}/{today.year})", expanded=False):
+    with st.expander(f"📅 Twoje zapisy na wózek w tym miesiącu ({today.month}/{today.year})", expanded=False):
         with st.spinner("Pobieram Twoje dyżury..."):
             df_my_events = get_user_events_for_month(today.year, today.month)
         
@@ -456,17 +471,11 @@ if choice == "Nowe Zgłoszenie":
     
     # KROK 1: ZGODA i TYP
     with st.expander("📝 Formularz zgłoszeniowy", expanded=True):
-        email_consent = st.checkbox(f"Zapisz {st.session_state['user_email']} jako adres e-mail dołączony do odpowiedzi.", value=True)
-        
         request_type = st.radio("Rodzaj zgłoszenia", ["Zapis", "Rezygnacja"], horizontal=True)
-        
-    if not email_consent:
-        st.warning("Wymagana jest zgoda na przetwarzanie adresu e-mail.")
-        st.stop()
 
     # KROK 2: OBSŁUGA ZAPISU
     if request_type == "Zapis":
-        st.subheader("📅 Zapis na dyżur")
+        st.subheader("📅 Zapis na służbę na wózku")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -487,7 +496,7 @@ if choice == "Nowe Zgłoszenie":
                 available_hours, _ = get_slots_for_day(d)
             
             if not available_hours:
-                st.warning("Brak wolnych terminów w tym dniu (lub brak dyżuru).")
+                st.warning("Brak wolnych terminów w tym dniu")
             else:
                 # Formatowanie godzin do wyboru
                 hour_options = {h: f"{h}:00 - {h+1}:00" for h in available_hours}
@@ -509,7 +518,7 @@ if choice == "Nowe Zgłoszenie":
 
     # KROK 3: OBSŁUGA REZYGNACJI
     elif request_type == "Rezygnacja":
-        st.subheader("🗑️ Rezygnacja z dyżuru")
+        st.subheader("🗑️ Rezygnacja ze służby na wózku")
         
         cancel_date = st.date_input("Wybierz datę, z której chcesz zrezygnować", min_value=datetime.date.today())
         
