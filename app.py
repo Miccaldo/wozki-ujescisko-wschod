@@ -9,6 +9,9 @@ from zoneinfo import ZoneInfo
 import streamlit.components.v1 as components
 import time
 from streamlit_local_storage import LocalStorage
+import smtplib
+from email.message import EmailMessage
+import re
 
 st.set_page_config(page_title="Wózki Ujeścisko", page_icon="🛒", layout="centered")
 
@@ -60,7 +63,17 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_users_db():
     try:
-        df = conn.read(worksheet="ACL", usecols=[0, 1, 2, 3, 4], ttl=60)
+        df = conn.read(worksheet="ACL", usecols=[0, 1, 2, 3, 4, 5], ttl=60)
+
+        df['Imię'] = df['Imię'].astype(str).str.strip()
+        df['Nazwisko'] = df['Nazwisko'].astype(str).str.strip()
+        
+        # Jeśli kolumny Płeć nie ma lub jest pusta, wypełniamy 'M'
+        if 'Płeć' not in df.columns:
+            df['Płeć'] = 'M'
+        else:
+            df['Płeć'] = df['Płeć'].fillna('M').astype(str).str.upper().str.strip()
+
         return df
     except Exception as e:
         st.error(f"Błąd bazy danych: {e}")
@@ -168,7 +181,6 @@ def get_slots_for_day(date_obj):
             continue
 
         count = len(emails)
-        print(count)
         if count >= 2:
             slot_occupancy[ev_hour] = "FULL"
         else:
@@ -196,6 +208,13 @@ def book_event(date_obj, hour, second_preacher_obj=None):
     user_email = st.session_state['user_email']
     user_name = st.session_state['user_name']
     tz = ZoneInfo("Europe/Warsaw")
+
+    gender = st.session_state.get('user_gender', 'M')
+
+    verb_signed = "zapisała" if gender == "K" else "zapisał"
+    verb_joined = "dołączyła" if gender == "K" else "dołączył"
+
+    style_b = 'style="color: #000000; font-weight: bold;"'
     
     if isinstance(date_obj, datetime.datetime):
         d = date_obj.date()
@@ -236,6 +255,15 @@ def book_event(date_obj, hour, second_preacher_obj=None):
         }
         try:
             service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
+
+            if second_preacher_obj:
+                subj = "Służba przy wózku - Nowy termin"
+                body = (f"Cześć!\n\n"
+                        f"{user_name} {verb_signed} Ciebie do współpracy.\n"
+                        f"Data: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\n"
+                        f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
+                        f"Do zobaczenia!")
+                send_notification_email(second_preacher_obj['Email'], subj, body)
             return True
         except Exception as e:
             print(f"Błąd insert: {e}")
@@ -248,6 +276,7 @@ def book_event(date_obj, hour, second_preacher_obj=None):
 
         current_desc = target_event.get('description', '')
         current_title = target_event.get('summary', '')
+        organizer_email = current_desc.replace('email:', '').split(',')[0].strip()
         
         emails = [e.strip() for e in current_desc.replace('email:', '').split(',')]
         if len(emails) >= 2:
@@ -262,6 +291,14 @@ def book_event(date_obj, hour, second_preacher_obj=None):
         
         try:
             service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
+            if organizer_email:
+                subj = "Służba przy wózku - Ktoś dołączył!"
+                body = (f"Cześć!\n\n"
+                        f"{user_name} {verb_joined} do Ciebie do współpracy.\n"
+                        f"Data: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\n"
+                        f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
+                        f"Do zobaczenia!")
+                send_notification_email(organizer_email, subj, body)
             return True
         except Exception as e:
             print(f"Błąd update: {e}")
@@ -274,6 +311,14 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
     """
     service = get_calendar_service()
     user_email = st.session_state['user_email'].strip().lower()
+    user_name = st.session_state['user_name']
+    gender = st.session_state.get('user_gender', 'M')
+
+    verb_canceled = "odwołała" if gender == "K" else "odwołał"
+    verb_unsigned = "wypisała" if gender == "K" else "wypisał"
+
+    style_b = 'style="color: #000000; font-weight: bold;"'
+
     tz = ZoneInfo("Europe/Warsaw")
     
     if isinstance(date_obj, datetime.datetime):
@@ -318,6 +363,16 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
             
         if has_partner and delete_entirely:
             service.events().delete(calendarId=CALENDAR_ID, eventId=target_event['id']).execute()
+            
+            partner_email = emails[1]
+            subj = "Służba przy wózku - Odwołano termin"
+            body = (f"Cześć,\n\n"
+                    f"{user_name} {verb_canceled} Waszą służbę przy wózku.\n"
+                    f"Data: <b {style_b}>{date_part.strftime('%d-%m-%Y')}</b>\n"
+                    f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
+                    f"Termin został usunięty z grafiku.")
+            send_notification_email(partner_email, subj, body)
+            
             return True
             
         if has_partner and not delete_entirely:
@@ -333,6 +388,16 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
             target_event['description'] = new_desc
             
             service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
+            
+            partner_email = emails[1]
+            subj = "Służba na wózku - Zmiana w grafiku"
+            body = (f"Cześć,\n\n"
+                    f"{user_name} {verb_unsigned} się z Waszego terminu.\n"
+                    f"Data: <b {style_b}>{date_part.strftime('%d-%m-%Y')}</b>\n"
+                    f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
+                    f"Twój termin jest otwarty na współpracę z innym głosicielem.")
+            send_notification_email(partner_email, subj, body)
+
             return True
 
     elif len(emails) > 1 and emails[1] == user_email:
@@ -346,6 +411,16 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
         target_event['description'] = new_desc
         
         service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
+        
+        organizer_email = emails[0]
+        subj = "Służba na wózku - Zmiana w grafiku"
+        body = (f"Cześć,\n\n"
+                f"{user_name} {verb_unsigned} się z Waszego terminu.\n"
+                f"Data: <b {style_b}>{date_part.strftime('%d-%m-%Y')}</b>\n"
+                f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
+                f"Twój termin jest otwarty na współpracę z innym głosicielem.")
+        send_notification_email(organizer_email, subj, body)
+        
         return True
             
     return False
@@ -425,6 +500,68 @@ def load_users():
     return df
 
 
+def send_notification_email(to_email, subject, body):
+    """Wysyła e-mail HTML używając SMTP Gmaila."""
+    try:
+        sender = st.secrets["email"]["sender_address"]
+        password = st.secrets["email"]["app_password"]
+        server_host = st.secrets["email"]["smtp_server"]
+        port = st.secrets["email"]["smtp_port"]
+
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = sender
+        msg['To'] = to_email
+
+        # 1. Wersja tekstowa (dla starych klientów poczty)
+        msg.set_content(body)
+
+        # 2. Wersja HTML (Ładna)
+        # Zamieniamy znaki nowej linii \n na <br> dla HTML
+        html_body = body.replace('\n', '<br>')
+        
+        html_template = f"""
+        <html>
+          <body style="font-family: Arial, sans-serif; color: #333333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 20px auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+              
+              <!-- NAGŁÓWEK -->
+              <div style="background-color: #5d3b87; padding: 20px; text-align: center;">
+                <h2 style="color: #ffffff; margin: 0; font-size: 24px;">Gdańsk Ujeścisko - Wschód</h2>
+              </div>
+              
+              <!-- TREŚĆ -->
+              <div style="padding: 30px 20px; background-color: #ffffff;">
+                <h3 style="color: #5d3b87; margin-top: 0;">{subject}</h3>
+                <p style="font-size: 16px; line-height: 1.6; color: #555555;">
+                  {html_body}
+                </p>
+              </div>
+              
+              <!-- STOPKA -->
+              <div style="background-color: #f8f9fa; padding: 15px; text-align: center; font-size: 12px; color: #888888; border-top: 1px solid #eeeeee;">
+                <p style="margin: 0;">Wiadomość wygenerowana automatycznie przez aplikację do zapisów zboru Gdańsk Ujeścisko-Wschód.</p>
+              </div>
+              
+            </div>
+          </body>
+        </html>
+        """
+
+        # Dodajemy wersję HTML jako alternatywę
+        msg.add_alternative(html_template, subtype='html')
+
+        with smtplib.SMTP_SSL(server_host, port) as server:
+            server.login(sender, password)
+            server.send_message(msg)
+            print(f"E-mail wysłany do {to_email}")
+            return True
+            
+    except Exception as e:
+        print(f"Błąd wysyłania e-maila: {e}")
+        return False
+
+
 def main():
     ls = LocalStorage()
     
@@ -456,6 +593,7 @@ def main():
             # Tutaj też łączymy imię i nazwisko tylko na potrzeby sesji
             st.session_state['user_name'] = f"{found_user['Imię']} {found_user['Nazwisko']}"
             st.session_state['user_role'] = found_user['Rola']
+            st.session_state['user_gender'] = found_user.get('Płeć', 'M')
             st.rerun()
 
     # --- SIDEBAR: LOGOWANIE ---
@@ -491,6 +629,7 @@ def main():
                 st.session_state['user_email'] = new_email
                 st.session_state['user_name'] = f"{user_data['Imię']} {user_data['Nazwisko']}"
                 st.session_state['user_role'] = user_data['Rola']
+                st.session_state['user_gender'] = user_data.get('Płeć', 'M')
                 
                 if 'available_slots_cache' in st.session_state:
                     del st.session_state['available_slots_cache']
@@ -613,7 +752,7 @@ def main():
                     can_proceed = True
                     
                     if is_joining and second_preacher_name != "Brak":
-                        st.error("⛔ Nie możesz zapisać drugiej osoby, ponieważ w tej godzinie jest już tylko 1 wolne miejsce.")
+                        st.error("⛔ Dołączając")
                         can_proceed = False
                     elif is_joining:
                          st.info(f"ℹ️ Dołączasz do: {slot_status.replace('Dołącz do: ', '')}")
@@ -686,9 +825,9 @@ def main():
                     if show_delete_all_option:
                         st.info(f"🗓️ *W tym terminie pełni z Tobą służbę druga osoba.*")
                         delete_entirely = st.checkbox(
-                            "⚠️ Usuń całkowicie wydarzenie (odwołaj służbę również dla drugiej osoby)",
+                            "⚠️ Usuń całkowicie wydarzenie",
                             value=False,
-                            help="Jeśli zaznaczysz, całe wydarzenie zniknie."
+                            help="Jeśli zaznaczysz, całe wydarzenie zniknie. Odwołasz służbę również dla Twojej pary."
                         )
                     
                     if st.button("⛔ Odwołaj służbę"):
