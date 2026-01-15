@@ -14,7 +14,7 @@ st.set_page_config(page_title="Wózki Ujeścisko", page_icon="🛒", layout="cen
 
 CALENDAR_ID = st.secrets["calendar_id"]
 SHEET_ID = st.secrets["sheet_id"]
-
+STORAGE_USER = 'wozki_stored_user'
 print(CALENDAR_ID, SHEET_ID)
 
 st.markdown("""
@@ -334,12 +334,21 @@ def get_user_events_for_month(year, month):
     user_email = st.session_state['user_email'].strip().lower()
     tz = ZoneInfo("Europe/Warsaw")
 
-    start_date = datetime.datetime(year, month, 1, 0, 0, 0, tzinfo=tz)
-    
+    # 1. Obliczamy koniec miesiąca (Początek następnego)
     if month == 12:
         end_date = datetime.datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=tz)
     else:
         end_date = datetime.datetime(year, month + 1, 1, 0, 0, 0, tzinfo=tz)
+
+    # 2. Obliczamy start (To jest ta zmiana)
+    now = datetime.datetime.now(tz)
+    
+    # Jeśli sprawdzamy bieżący miesiąc i rok -> startujemy od DZISIAJ (od północy)
+    if year == now.year and month == now.month:
+        start_date = datetime.datetime(year, month, now.day, 0, 0, 0, tzinfo=tz)
+    else:
+        # W innym przypadku (np. przyszły miesiąc) startujemy od 1. dnia
+        start_date = datetime.datetime(year, month, 1, 0, 0, 0, tzinfo=tz)
 
     time_min = start_date.isoformat()
     time_max = end_date.isoformat()
@@ -364,25 +373,22 @@ def get_user_events_for_month(year, month):
 
         if user_email in emails:
             start_str = event['start'].get('dateTime')
-            if not start_str: continue
+            if not start_str: continue 
             
             dt_obj = datetime.datetime.fromisoformat(start_str).astimezone(tz)
-            date_str = dt_obj.strftime("%d-%m-%Y") # np. 27-11-2025
+            
+            # Formatowanie daty i godziny
+            date_str = dt_obj.strftime("%d-%m-%Y") 
             time_str = f"{dt_obj.hour}:00 - {dt_obj.hour + 1}:00"
 
             title = event.get('summary', '')
-            partner = "Brak (Samodzielnie)"
             
-            if ' i ' in title:
-                parts = title.split(' i ')
-                partner = title 
-            else:
-                partner = "Samodzielnie"
+            display_info = title
 
             my_events.append({
                 "Data": date_str,
                 "Godzina": time_str,
-                "Szczegóły (Kto)": title
+                "Szczegóły (Kto)": display_info
             })
             
     return pd.DataFrame(my_events)
@@ -395,50 +401,67 @@ def load_users():
     df = df.dropna(subset=['Imię', 'Nazwisko'])
     df['Imię'] = df['Imię'].astype(str)
     df['Nazwisko'] = df['Nazwisko'].astype(str)
-    df['Display'] = df['Imię'] + ' ' + df['Nazwisko']
     return df
 
 
 def main():
     ls = LocalStorage()
-
+    
+    # 1. POBIERANIE BAZY UŻYTKOWNIKÓW
     df_users = load_users()
     
     if df_users.empty:
         st.error("Nie udało się załadować listy użytkowników z Arkusza ACL.")
         st.stop()
+        
+    # --- CZYSZCZENIE DANYCH (Bez tworzenia kolumny Display) ---
+    # Upewniamy się, że imię i nazwisko to stringi
+    df_users['Imię'] = df_users['Imię'].astype(str).str.strip()
+    df_users['Nazwisko'] = df_users['Nazwisko'].astype(str).str.strip()
+    
+    # Tworzymy pomocniczą listę stringów TYLKO do wyświetlania w UI
+    # Nie dodajemy jej do df_users na stałe
+    # Używamy zip, żeby iterować szybciej niż iterrows
+    all_full_names = sorted([f"{i} {n}" for i, n in zip(df_users['Imię'], df_users['Nazwisko'])])
 
-    stored_email = ls.getItem("wozki_stored_user")
+    # --- SILENT AUTO-LOGIN ---
+    stored_email = ls.getItem(STORAGE_USER)
     
     if stored_email and not st.session_state.get('user_email'):
         user_match = df_users[df_users['Email'] == stored_email]
         if not user_match.empty:
             found_user = user_match.iloc[0]
             st.session_state['user_email'] = found_user['Email']
+            # Tutaj też łączymy imię i nazwisko tylko na potrzeby sesji
             st.session_state['user_name'] = f"{found_user['Imię']} {found_user['Nazwisko']}"
             st.session_state['user_role'] = found_user['Rola']
             st.rerun()
 
+    # --- SIDEBAR: LOGOWANIE ---
+    
     pre_selected_index = None
     if 'user_name' in st.session_state:
-        current_display = st.session_state['user_name']
-        unique_users = sorted(df_users['Display'].unique())
+        # user_name w sesji ma format "Imię Nazwisko"
+        current_full_name = st.session_state['user_name']
         try:
-            pre_selected_index = unique_users.index(current_display)
+            pre_selected_index = all_full_names.index(current_full_name)
         except ValueError:
             pre_selected_index = None
 
     st.sidebar.header("👤 Zaloguj się")
     
-    selected_user_display = st.sidebar.selectbox(
+    selected_full_name = st.sidebar.selectbox(
         "Wybierz siebie z listy", 
-        sorted(df_users['Display'].unique()), 
+        all_full_names, 
         index=pre_selected_index, 
         placeholder="Kliknij, aby wybrać..."
     )
     
-    if selected_user_display:
-        matching_users = df_users[df_users['Display'] == selected_user_display]
+    # OBSŁUGA WYBORU UŻYTKOWNIKA
+    if selected_full_name:
+        mask = (df_users['Imię'] + ' ' + df_users['Nazwisko']) == selected_full_name
+        matching_users = df_users[mask]
+        
         if not matching_users.empty:
             user_data = matching_users.iloc[0]
             new_email = user_data['Email']
@@ -448,8 +471,7 @@ def main():
                 st.session_state['user_name'] = f"{user_data['Imię']} {user_data['Nazwisko']}"
                 st.session_state['user_role'] = user_data['Rola']
                 
-                ls.setItem("wozki_stored_user", new_email)
-                
+                ls.setItem(STORAGE_USER, new_email)
                 st.toast(f"Zalogowano: {st.session_state['user_name']}", icon="✅")
                 
                 timestamp = int(time.time())
@@ -466,18 +488,17 @@ def main():
                 """
                 components.html(js_close_sidebar, height=0)
 
-    elif selected_user_display is None:
+    # OBSŁUGA WYLOGOWANIA
+    elif selected_full_name is None:
         if 'user_email' in st.session_state:
             del st.session_state['user_email']
-            ls.deleteItem("wozki_stored_user")
+            ls.deleteItem(STORAGE_USER)
             st.rerun()
             
-        st.title("Służba przy wózku - zapisy 📝")
+        st.title("Służba na wózku - zapisy 📝")
         st.caption("Gdańsk Ujeścisko - Wschód")
         st.info("⬅️ Aby rozpocząć, wybierz siebie z listy w panelu po lewej stronie.")
         st.stop()
-
-    # --- MENU GŁÓWNE ---
     
     menu = ["Nowe zgłoszenie"]
     allowed_roles = ['owner', 'writer', 'admin']
@@ -489,14 +510,14 @@ def main():
     choice = st.sidebar.radio("Menu", menu)
 
     if choice == "Nowe zgłoszenie":
-        st.title("Służba przy wózku - zapisy 📝")
-        st.markdown(f"Cześć, **{st.session_state['user_name']}** ({st.session_state['user_email']})")
+        st.title("Służba na wózku - zapisy 📝")
+        st.markdown(f"Cześć, **{st.session_state['user_name']}**")
         st.markdown("<br>", unsafe_allow_html=True)
         
         today = datetime.date.today()
-
+        
         with st.expander(f"📅 Twoje zapisy w tym miesiącu ({today.month}/{today.year})", expanded=False):
-            with st.spinner("Pobieram Twoje dyżury..."):
+            with st.spinner("Pobieram Twoje zapisy..."):
                 df_my_events = get_user_events_for_month(today.year, today.month)
             
             if not df_my_events.empty:
@@ -513,24 +534,24 @@ def main():
             else:
                 st.info("Nie masz jeszcze żadnych zapisów w tym miesiącu.")
         
-        # WYBÓR TYPU ZGŁOSZENIA
         with st.expander("📝 Formularz zgłoszeniowy", expanded=True):
+            st.selectbox("Lokalizacja", ["Piotrkowska"], index=0, disabled=True)
             request_type = st.radio("Rodzaj zgłoszenia", ["Zapis", "Rezygnacja"], horizontal=True)
 
-        # --- LOGIKA ZAPISU ---
         if request_type == "Zapis":
-            st.subheader("📅 Zapis na służbę przy wózku")
+            st.subheader("📅 Zapis na służbę na wózku")
             
             col1, col2 = st.columns(2)
             with col1:
                 selected_date = st.date_input("Wybierz datę", min_value=datetime.date.today())
             
             with col2:
-                other_users = df_users[df_users['Email'] != st.session_state['user_email']]
-                second_preacher_name = st.selectbox("Drugi głosiciel (opcjonalnie)", ["Brak"] + list(other_users['Display']))
+                other_users_df = df_users[df_users['Email'] != st.session_state['user_email']]
+                other_users_names = sorted([f"{i} {n}" for i, n in zip(other_users_df['Imię'], other_users_df['Nazwisko'])])
+                
+                second_preacher_name = st.selectbox("Drugi głosiciel (opcjonalnie)", ["Brak"] + other_users_names)
 
             if selected_date:
-                # Cache: Pobieramy dane z API tylko jeśli zmieniono datę
                 if st.session_state.get('last_fetched_date') != selected_date:
                     with st.spinner("Sprawdzam grafik..."):
                         d = datetime.datetime.combine(selected_date, datetime.time(0,0))
@@ -555,7 +576,6 @@ def main():
 
                     selected_hour = st.selectbox("Wybierz godzinę", options=sorted_hours, format_func=format_hour_label)
                     
-                    # Walidacja slotu (czy nie robimy tłoku 3 osób)
                     slot_status = available_slots[selected_hour]
                     is_joining = "Dołącz do" in slot_status
                     can_proceed = True
@@ -564,20 +584,23 @@ def main():
                         st.error("⛔ Nie możesz zapisać drugiej osoby, ponieważ w tej godzinie jest już tylko 1 wolne miejsce.")
                         can_proceed = False
                     elif is_joining:
-                         st.info(f"ℹ️ Dołączasz do dyżuru: {slot_status.replace('Dołącz do: ', '')}")
+                         st.info(f"ℹ️ Dołączasz do: {slot_status.replace('Dołącz do: ', '')}")
 
                     if st.button("✅ Zapisz się", disabled=not can_proceed):
                         with st.spinner("Zapisywanie..."):
                             d_booking = datetime.datetime.combine(selected_date, datetime.time(0,0))
+                            
                             sec_data = None
                             if second_preacher_name != "Brak":
-                                sec_data = df_users[df_users['Display'] == second_preacher_name].iloc[0].to_dict()
+                                # Znajdujemy dane drugiego głosiciela (konstrukcja maski w locie)
+                                mask_sec = (df_users['Imię'] + ' ' + df_users['Nazwisko']) == second_preacher_name
+                                sec_match = df_users[mask_sec]
+                                if not sec_match.empty:
+                                    sec_data = sec_match.iloc[0].to_dict()
                             
                             success = book_event(d_booking, selected_hour, sec_data)
                             if success:
-                                st.success("Pomyślnie dodano termin!")
-                                st.balloons()
-                                # Czyścimy cache daty, by wymusić odświeżenie grafiku
+                                st.success("Pomyślnie zapisano!")
                                 if 'last_fetched_date' in st.session_state:
                                     del st.session_state['last_fetched_date']
                                 time.sleep(1.5)
@@ -585,19 +608,18 @@ def main():
                             else:
                                 st.error("Wystąpił błąd podczas zapisu.")
 
-        # --- LOGIKA REZYGNACJI ---
         elif request_type == "Rezygnacja":
             st.subheader("❌ Rezygnacja ze służby przy wózku")
             
             cancel_date = st.date_input("Wybierz datę, z której chcesz zrezygnować", min_value=datetime.date.today())
             
             if cancel_date:
-                with st.spinner("Szukam Twoich zapisów..."):
+                with st.spinner("Szukam Twoich terminów..."):
                     d = datetime.datetime.combine(cancel_date, datetime.time(0,0))
                     _, my_hours = get_slots_for_day(d)
                 
                 if not my_hours:
-                    st.info("Nie masz żadnych zapisów w tym dniu.")
+                    st.info("Nie masz żadnych terminów w tym dniu.")
                 else:
                     hour_options = {h: f"{h}:00 - {h+1}:00" for h in my_hours}
                     hour_to_cancel = st.selectbox(
@@ -607,7 +629,6 @@ def main():
                     )
                     
                     show_delete_all_option = False
-                    
                     tz = ZoneInfo("Europe/Warsaw")
                     check_start = datetime.datetime.combine(cancel_date, datetime.time(hour_to_cancel, 0), tzinfo=tz)
                     check_end = check_start + datetime.timedelta(hours=1)
@@ -635,31 +656,30 @@ def main():
                         delete_entirely = st.checkbox(
                             "⚠️ Usuń całkowicie wydarzenie (odwołaj służbę również dla drugiej osoby)",
                             value=False,
-                            help="Jeśli zaznaczysz, całe wydarzenie zniknie. Jeśli nie, usuniesz tylko siebie, a partner zostanie."
+                            help="Jeśli zaznaczysz, całe wydarzenie zniknie."
                         )
                     
-                    if st.button("🚫 Odwołaj służbę"):
+                    if st.button("⛔ Odwołaj służbę"):
                         with st.spinner("Usuwanie..."):
                             success = cancel_booking(d, hour_to_cancel, delete_entirely=delete_entirely)
                             if success:
                                 if delete_entirely:
-                                    st.success("Cały termin został usunięty.")
+                                    st.success("Całe wydarzenie zostało usunięte.")
                                 else:
-                                    st.success("Wypisano ze służby przy wózku")
-                                
+                                    st.success("Odwołano służbę przy wózku.")
                                 time.sleep(1)
                                 st.rerun()
                             else:
-                                st.error("Nie udało się odwołać służby.")
+                                st.error("Nie udało się odwołać służby przy wózku.")
 
     elif choice == "Ustawienia":
         if current_role not in allowed_roles:
             st.error("⛔ Brak uprawnień do tej sekcji.")
             st.stop()
 
-        st.title("🛠️ Lista Głosicieli (Baza)")
+        st.title("🛠️ Lista głosicieli")
         
-        if st.button("Odśwież dane"):
+        if st.button("Odśwież dane", icon=":material/sync:"):
             st.cache_data.clear()
             st.rerun()
             
@@ -668,6 +688,5 @@ def main():
         if st.button("Zapisz zmiany w bazie"):
             update_user_db(edited_df)
 
-# Na samym dole pliku dodaj ten warunek:
 if __name__ == "__main__":
     main()
