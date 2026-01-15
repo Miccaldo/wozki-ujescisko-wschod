@@ -82,6 +82,28 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+components.html("""
+<script>
+window.addEventListener('load', function() {
+    // Ukrywa header
+    const header = document.querySelector('[data-testid="stAppHeader"]');
+    if(header) { header.style.display = 'none'; }
+
+    // Ukrywa status / ludzik
+    const status = document.querySelector('[data-testid="stStatusWidget"]');
+    if(status) { status.style.display = 'none'; }
+
+    // Ukrywa czarny Manage App
+    const manageBtn = document.querySelector('button[aria-label="Manage app"]');
+    if(manageBtn) { manageBtn.style.display = 'none'; }
+
+    // Ukrywa branding w prawym górnym rogu
+    const brand = document.querySelector('[data-testid="stDecoration"]');
+    if(brand) { brand.style.display = 'none'; }
+});
+</script>
+""", height=0)
+
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_users_db():
