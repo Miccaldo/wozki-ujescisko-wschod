@@ -13,7 +13,7 @@ import smtplib
 from email.message import EmailMessage
 import re
 
-st.set_page_config(page_title="Wózki Ujeścisko", page_icon="🛒", layout="centered")
+st.set_page_config(page_title="Służba przy wózku", page_icon="👥", layout="centered")
 
 CALENDAR_ID = st.secrets["calendar_id"]
 SHEET_ID = st.secrets["sheet_id"]
@@ -22,6 +22,24 @@ print(CALENDAR_ID, SHEET_ID)
 
 st.markdown("""
     <style>
+
+/* Ukrywa status ładowania (ludzik / pływający gif) */
+[data-testid="stStatusWidget"] {
+    display: none !important;
+}
+
+/* Ukrywa branding Streamlit w prawym górnym rogu */
+[data-testid="stDecoration"] {
+    display: none !important;
+}
+
+/* Ukrywa branding Streamlit w prawym górnym rogu */
+[data-testid="stMainMenu"] {
+    display: none !important;
+}
+
+
+
     .stButton>button {
         background-color: #5d3b87;
         color: white;
@@ -175,6 +193,9 @@ def get_slots_for_day(date_obj):
         if 'email:' in desc:
             clean_desc = desc.replace('email:', '')
             emails = [e.strip().lower() for e in clean_desc.split(',')]
+        else:
+            slot_occupancy[ev_hour] = "FULL"
+            continue
         
         if current_user_email in emails:
             my_booked_hours.append(ev_hour)
@@ -752,7 +773,7 @@ def main():
                     can_proceed = True
                     
                     if is_joining and second_preacher_name != "Brak":
-                        st.error("⛔ Dołączając")
+                        st.error("⛔ Nie możesz zapisać drugiej osoby, ponieważ w tej godzinie jest już tylko 1 wolne miejsce.")
                         can_proceed = False
                     elif is_joining:
                          st.info(f"ℹ️ Dołączasz do: {slot_status.replace('Dołącz do: ', '')}")
