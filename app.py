@@ -492,6 +492,11 @@ def main():
                 st.session_state['user_name'] = f"{user_data['Imię']} {user_data['Nazwisko']}"
                 st.session_state['user_role'] = user_data['Rola']
                 
+                if 'available_slots_cache' in st.session_state:
+                    del st.session_state['available_slots_cache']
+                if 'last_fetched_date' in st.session_state:
+                    del st.session_state['last_fetched_date']
+
                 ls.setItem(STORAGE_USER, new_email)
                 st.toast(f"Zalogowano: {st.session_state['user_name']}", icon="✅")
                 
@@ -508,6 +513,10 @@ def main():
                 </script>
                 """
                 components.html(js_close_sidebar, height=0)
+
+                time.sleep(0.5) # Krótka pauza, żeby Toast zdążył mignąć
+                st.rerun()
+
 
     # OBSŁUGA WYLOGOWANIA
     elif selected_full_name is None:
@@ -565,7 +574,7 @@ def main():
             
             col1, col2 = st.columns(2)
             with col1:
-                selected_date = st.date_input("Wybierz datę", min_value=datetime.date.today())
+                selected_date = st.date_input("Wybierz datę", min_value=datetime.date.today(), format="DD-MM-YYYY")
             
             with col2:
                 other_users_df = df_users[df_users['Email'] != st.session_state['user_email']]
@@ -633,7 +642,7 @@ def main():
         elif request_type == "Rezygnacja":
             st.subheader("❌ Rezygnacja ze służby przy wózku")
             
-            cancel_date = st.date_input("Wybierz datę, z której chcesz zrezygnować", min_value=datetime.date.today())
+            cancel_date = st.date_input("Wybierz datę, z której chcesz zrezygnować", min_value=datetime.date.today(), format="DD-MM-YYYY")
             
             if cancel_date:
                 with st.spinner("Szukam Twoich terminów..."):
