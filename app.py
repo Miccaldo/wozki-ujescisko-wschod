@@ -23,6 +23,11 @@ print(CALENDAR_ID, SHEET_ID)
 st.markdown("""
     <style>
 
+/* Główny header aplikacji */
+[data-testid="stAppHeader"] {
+    display: none;
+}
+
 /* Ukrywa status ładowania (ludzik / pływający gif) */
 [data-testid="stStatusWidget"] {
     display: none !important;
