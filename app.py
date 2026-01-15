@@ -497,6 +497,7 @@ def main():
                 if 'last_fetched_date' in st.session_state:
                     del st.session_state['last_fetched_date']
 
+                st.session_state['request_type_radio'] = "Zapis"
                 ls.setItem(STORAGE_USER, new_email)
                 st.toast(f"Zalogowano: {st.session_state['user_name']}", icon="✅")
                 
@@ -567,7 +568,7 @@ def main():
         
         with st.expander("📝 Formularz zgłoszeniowy", expanded=True):
             st.selectbox("Lokalizacja", ["Piotrkowska"], index=0, disabled=True)
-            request_type = st.radio("Rodzaj zgłoszenia", ["Zapis", "Rezygnacja"], horizontal=True)
+            request_type = st.radio("Rodzaj zgłoszenia", ["Zapis", "Rezygnacja"], horizontal=True, key="request_type_radio")
 
         if request_type == "Zapis":
             st.subheader("📅 Zapis na służbę przy wózku")
@@ -683,7 +684,7 @@ def main():
                     
                     delete_entirely = False
                     if show_delete_all_option:
-                        st.markdown(f"🗓️ *W tym terminie pełni z Tobą służbę druga osoba.*")
+                        st.info(f"🗓️ *W tym terminie pełni z Tobą służbę druga osoba.*")
                         delete_entirely = st.checkbox(
                             "⚠️ Usuń całkowicie wydarzenie (odwołaj służbę również dla drugiej osoby)",
                             value=False,
