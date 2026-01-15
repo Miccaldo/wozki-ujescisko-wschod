@@ -30,8 +30,29 @@ st.markdown("""
         background-color: #4c3170;
         color: white;
     }
+    [data-testid="stHeaderActionElements"] {
+        display: none !important;
+    }
     h1, h2, h3 { color: #5d3b87; }
-    .block-container { padding-top: 2rem; }
+    .block-container { padding-top: 2rem;
+    
+    @media (max-width: 768px) {
+        h1 {
+            font-size: 1.8rem !important; /* Zmniejszamy tytuł */
+        }
+        h2 {
+            font-size: 1.4rem !important; /* Zmniejszamy podtytuły */
+        }
+        h3 {
+            font-size: 1.2rem !important;
+        }
+        /* Opcjonalnie: zmniejszamy padding, żeby na telefonie było więcej miejsca */
+        .block-container {
+            padding-top: 0.5rem;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+     }
     </style>
 """, unsafe_allow_html=True)
 
@@ -495,7 +516,7 @@ def main():
             ls.deleteItem(STORAGE_USER)
             st.rerun()
             
-        st.title("Służba na wózku - zapisy 📝")
+        st.title("Służba przy wózku - zapisy 📝")
         st.caption("Gdańsk Ujeścisko - Wschód")
         st.info("⬅️ Aby rozpocząć, wybierz siebie z listy w panelu po lewej stronie.")
         st.stop()
@@ -510,9 +531,10 @@ def main():
     choice = st.sidebar.radio("Menu", menu)
 
     if choice == "Nowe zgłoszenie":
-        st.title("Służba na wózku - zapisy 📝")
-        st.markdown(f"Cześć, **{st.session_state['user_name']}**")
+        st.title("Służba przy wózku 📝")
+        st.caption("Gdańsk Ujeścisko - Wschód")
         st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(f"Cześć, **{st.session_state['user_name']}**")
         
         today = datetime.date.today()
         
@@ -539,7 +561,7 @@ def main():
             request_type = st.radio("Rodzaj zgłoszenia", ["Zapis", "Rezygnacja"], horizontal=True)
 
         if request_type == "Zapis":
-            st.subheader("📅 Zapis na służbę na wózku")
+            st.subheader("📅 Zapis na służbę przy wózku")
             
             col1, col2 = st.columns(2)
             with col1:
