@@ -790,115 +790,151 @@ def main():
         if request_type == "Zapis":
             st.subheader("📅 Zapis na służbę przy wózku")
             
-            col1, col2 = st.columns(2)
-            with col1:
-                selected_date = st.date_input("Wybierz datę", min_value=datetime.date.today(), format="DD-MM-YYYY")
+            st.markdown("""
+            <style>
+            /* 1. RESET BAZOWY - USUWAMY RAMKI I TŁA */
+            div[data-testid="stColumn"] button {
+                border: none !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                padding: 0 !important;
+                height: 100%;
+                width: 100%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            /* 2. STYLIZACJA TEKSTU (SERCA) - WSPÓLNA */
+            div[data-testid="stColumn"] button p {
+                font-size: 36px !important; /* Duży rozmiar */
+                line-height: 1 !important;
+                margin: 0 !important;
+                padding-top: 6px !important; /* Korekta pionowa */
+                
+                /* KLUCZOWE: Wymuszamy zwykły font, żeby telefon nie zrobił z tego czerwonej emotki */
+                font-family: Arial, sans-serif !important; 
+                font-weight: bold !important;
+            }
+
+            /* 3. STAN: BRAK (Szare serce) - type="secondary" */
+            button[kind="secondary"] p {
+                color: #d1d5db !important; /* Jasny szary */
+                transition: color 0.3s;
+            }
+            /* Po najechaniu robi się lekko fioletowe */
+            button[kind="secondary"]:hover p {
+                color: #5d3b87 !important;
+            }
+
+            /* 4. STAN: ULUBIONE (Fioletowe serce) - type="primary" */
+            button[kind="primary"] p {
+                color: #5d3b87 !important; /* Twój fiolet */
+            }
+            /* Usuwamy tło primary */
+            button[kind="primary"]:hover,
+            button[kind="primary"]:active,
+            button[kind="primary"]:focus {
+                background: transparent !important;
+                color: #5d3b87 !important;
+            }
+
+            /* 5. DISABLED */
+            button[disabled] p {
+                color: #f3f4f6 !important; /* Bardzo blady */
+            }
+            button[disabled]{
+                pointer-events: none !important;
+            }
+
+            /* 6. FIX NA MOBILE */
+            @media (max-width: 640px) {
+                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] {
+                    flex-direction: row !important;
+                    flex-wrap: nowrap !important;
+                }
+                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+                    width: 80% !important;
+                    min-width: 80% !important;
+                    flex: 1 1 auto !important;
+                }
+                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+                    width: 20% !important;
+                    min-width: 20% !important;
+                    flex: 1 1 auto !important;
+                }
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
+            # --- UKŁAD HYBRYDOWY ---
+            c_main_left, c_main_right = st.columns([0.5, 0.5])
             
-            with col2:
-                # --- CSS: CZYSTA IKONA (BEZ RAMKI) ---
-                st.markdown("""
-                <style>
-                /* Targetujemy przyciski serca po ich tooltipie (help) */
-                button[title="Dodaj do ulubionych"], 
-                button[title="Usuń z ulubionych"],
-                button[kind="secondary"][disabled] { /* Dla nieaktywnego serca */
-                    border: none !important;
-                    background: transparent !important;
-                    box-shadow: none !important;
-                    padding: 0 !important;
-                    min-height: 0px !important;
-                    height: auto !important;
-                    margin-top: 31px !important; /* Idealne wyrównanie z polem selectbox */
-                    line-height: 1 !important;
-                }
-                
-                /* Usuwamy efekt hover (tło), zostawiamy tylko zmianę kursora */
-                button[title="Dodaj do ulubionych"]:hover, 
-                button[title="Usuń z ulubionych"]:hover {
-                    border: none !important;
-                    background: transparent !important;
-                    color: #4c3170 !important; /* Lekka zmiana odcienia */
-                }
+            with c_main_left:
+                selected_date = st.date_input("Wybierz datę", min_value=datetime.date.today(), format="DD-MM-YYYY")
 
-                /* Stylizacja samej ikony wewnątrz */
-                button[title="Dodaj do ulubionych"] span[data-testid="stIconMaterial"], 
-                button[title="Usuń z ulubionych"] span[data-testid="stIconMaterial"] {
-                    font-size: 28px !important; /* Rozmiar ikony */
-                    color: #5d3b87 !important;  /* Twój fiolet */
-                    vertical-align: middle !important;
-                }
-                
-                /* Styl dla nieaktywnego serca (gdy wybrano Brak) */
-                button[disabled] span[data-testid="stIconMaterial"] {
-                    font-size: 28px !important;
-                    color: #e0e0e0 !important; /* Szary */
-                }
-                </style>
-                """, unsafe_allow_html=True)
+            # --- LOGIKA DANYCH ---
+            current_user_idx = df_users.index[df_users['Email'] == st.session_state['user_email']].tolist()[0]
+            fav_raw = df_users.at[current_user_idx, 'Ulubione']
+            current_fav_string = str(fav_raw) if pd.notna(fav_raw) else ""
+            my_favorites = [e.strip().lower() for e in current_fav_string.split(',') if '@' in e]
 
-                # --- LOGIKA DANYCH ---
-                current_user_idx = df_users.index[df_users['Email'] == st.session_state['user_email']].tolist()[0]
-                # Pobieramy ulubione z zabezpieczeniem, jeśli komórka jest pusta
-                fav_raw = df_users.at[current_user_idx, 'Ulubione']
-                current_fav_string = str(fav_raw) if pd.notna(fav_raw) else ""
-                my_favorites = [e.strip().lower() for e in current_fav_string.split(',') if '@' in e]
+            other_users_df = df_users[df_users['Email'] != st.session_state['user_email']]
+            
+            fav_list = []
+            regular_list = []
+            name_to_email_map = {}
 
-                other_users_df = df_users[df_users['Email'] != st.session_state['user_email']]
+            for index, row in other_users_df.iterrows():
+                display_name = f"{row['Imię']} {row['Nazwisko']}"
+                email = row['Email'].strip().lower()
+                name_to_email_map[display_name] = email
                 
-                fav_list = []
-                regular_list = []
-                name_to_email_map = {}
-
-                for index, row in other_users_df.iterrows():
-                    display_name = f"{row['Imię']} {row['Nazwisko']}"
-                    email = row['Email'].strip().lower()
-                    name_to_email_map[display_name] = email
-                    
-                    if email in my_favorites:
-                        fav_list.append(display_name)
-                    else:
-                        regular_list.append(display_name)
-                
-                final_options = ["Brak"]
-                if fav_list:
-                    final_options.append("─── ULUBIENI ───")
-                    final_options.extend(sorted(fav_list))
-                if regular_list:
-                    final_options.append("─── POZOSTALI ───")
-                    final_options.extend(sorted(regular_list))
-                
-                # --- UKŁAD ---
-                # Wąska kolumna na ikonę (0.12 wystarczy na samą ikonkę)
-                c_sel, c_btn = st.columns([0.88, 0.12])
+                if email in my_favorites:
+                    fav_list.append(display_name)
+                else:
+                    regular_list.append(display_name)
+            
+            final_options = ["Brak"]
+            if fav_list:
+                final_options.append("─── ULUBIONE ───")
+                final_options.extend(sorted(fav_list))
+            if regular_list:
+                final_options.append("─────────────")
+                final_options.extend(sorted(regular_list))
+            
+            # --- PRAWA STRONA ---
+            with c_main_right:
+                c_sel, c_btn = st.columns([0.85, 0.15], vertical_alignment="bottom")
                 
                 with c_sel:
                     second_preacher_name = st.selectbox("Drugi głosiciel", final_options)
                 
                 with c_btn:
-                    # Nie potrzebujemy tu st.write(""), margines załatwia CSS
-                    
                     selected_email = name_to_email_map.get(second_preacher_name)
                     
                     if selected_email:
                         if selected_email in my_favorites:
-                            # PEŁNE SERCE (Usuwanie)
-                            if st.button("", icon=":material/favorite:", help="Usuń z ulubionych"):
+                            # --- STAN: JEST W ULUBIONYCH ---
+                            # Dajemy type="primary" -> CSS zrobi FIOLETOWE
+                            if st.button("❤", type="primary", help="Usuń z ulubionych"):
                                 my_favorites.remove(selected_email)
                                 new_fav_str = ",".join(my_favorites)
                                 df_users.at[current_user_idx, 'Ulubione'] = new_fav_str
                                 update_user_db(df_users)
                                 st.rerun()
                         else:
-                            # PUSTE SERCE (Dodawanie)
-                            if st.button("", icon=":material/favorite_border:", help="Dodaj do ulubionych"):
+                            # --- STAN: NIE JEST W ULUBIONYCH ---
+                            # Dajemy type="secondary" -> CSS zrobi SZARE
+                            if st.button("❤", type="secondary", help="Dodaj do ulubionych"):
                                 my_favorites.append(selected_email)
                                 new_fav_str = ",".join(my_favorites)
                                 df_users.at[current_user_idx, 'Ulubione'] = new_fav_str
                                 update_user_db(df_users)
                                 st.rerun()
                     else:
-                        # Szare serce (placeholder)
-                        st.button("", icon=":material/favorite_border:", disabled=True)
+                        # Disabled
+                        st.button("❤", disabled=True)
 
             if selected_date:
                 if st.session_state.get('last_fetched_date') != selected_date:
