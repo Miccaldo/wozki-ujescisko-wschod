@@ -910,18 +910,12 @@ def main():
                     regular_list.append(display_name)
             
             final_options = ["Brak"]
-            fav_header = "─── ULUBIONE ───"
-            reg_header = "─────────────"
-
-            # dopasowanie długości
-            reg_header = reg_header.ljust(len(fav_header), "─")
-
+            
             if fav_list:
-                final_options.append(fav_header)
+                final_options.append("─── ULUBIONE ───")
                 final_options.extend(sorted(fav_list))
-
             if regular_list:
-                final_options.append(reg_header)
+                final_options.append("───")
                 final_options.extend(sorted(regular_list))
             
             # --- PRAWA STRONA ---
