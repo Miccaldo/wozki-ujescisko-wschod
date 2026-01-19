@@ -108,16 +108,20 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_users_db():
     try:
-        df = conn.read(worksheet="ACL", usecols=[0, 1, 2, 3, 4, 5], ttl=60)
+        # Zmieniamy usecols na [0, 1, 2, 3, 4, 5, 6] (doszło Ulubione)
+        df = conn.read(worksheet="ACL", usecols=[0, 1, 2, 3, 4, 5, 6], ttl=60)
 
         df['Imię'] = df['Imię'].astype(str).str.strip()
         df['Nazwisko'] = df['Nazwisko'].astype(str).str.strip()
         
-        # Jeśli kolumny Płeć nie ma lub jest pusta, wypełniamy 'M'
-        if 'Płeć' not in df.columns:
-            df['Płeć'] = 'M'
+        if 'Płeć' not in df.columns: df['Płeć'] = 'M'
+        else: df['Płeć'] = df['Płeć'].fillna('M').astype(str).str.upper().str.strip()
+
+        # Obsługa kolumny Ulubione
+        if 'Ulubione' not in df.columns:
+            df['Ulubione'] = ''
         else:
-            df['Płeć'] = df['Płeć'].fillna('M').astype(str).str.upper().str.strip()
+            df['Ulubione'] = df['Ulubione'].fillna('').astype(str)
 
         return df
     except Exception as e:
@@ -632,6 +636,19 @@ def main():
         setInterval(disableKeyboardOnMobile, 500);
     </script>
     """, height=0)
+
+    components.html("""
+    <script>
+        function disableKeyboardOnMobile() {
+            const inputs = window.parent.document.querySelectorAll('div[data-baseweb="select"] input');
+            inputs.forEach(input => {
+                input.setAttribute('readonly', 'readonly');
+                input.setAttribute('inputmode', 'none');
+            });
+        }
+        setInterval(disableKeyboardOnMobile, 500);
+    </script>
+    """, height=0)
         
     # --- CZYSZCZENIE DANYCH (Bez tworzenia kolumny Display) ---
     # Upewniamy się, że imię i nazwisko to stringi
@@ -778,10 +795,110 @@ def main():
                 selected_date = st.date_input("Wybierz datę", min_value=datetime.date.today(), format="DD-MM-YYYY")
             
             with col2:
-                other_users_df = df_users[df_users['Email'] != st.session_state['user_email']]
-                other_users_names = sorted([f"{i} {n}" for i, n in zip(other_users_df['Imię'], other_users_df['Nazwisko'])])
+                # --- CSS: CZYSTA IKONA (BEZ RAMKI) ---
+                st.markdown("""
+                <style>
+                /* Targetujemy przyciski serca po ich tooltipie (help) */
+                button[title="Dodaj do ulubionych"], 
+                button[title="Usuń z ulubionych"],
+                button[kind="secondary"][disabled] { /* Dla nieaktywnego serca */
+                    border: none !important;
+                    background: transparent !important;
+                    box-shadow: none !important;
+                    padding: 0 !important;
+                    min-height: 0px !important;
+                    height: auto !important;
+                    margin-top: 31px !important; /* Idealne wyrównanie z polem selectbox */
+                    line-height: 1 !important;
+                }
                 
-                second_preacher_name = st.selectbox("Drugi głosiciel (opcjonalnie)", ["Brak"] + other_users_names)
+                /* Usuwamy efekt hover (tło), zostawiamy tylko zmianę kursora */
+                button[title="Dodaj do ulubionych"]:hover, 
+                button[title="Usuń z ulubionych"]:hover {
+                    border: none !important;
+                    background: transparent !important;
+                    color: #4c3170 !important; /* Lekka zmiana odcienia */
+                }
+
+                /* Stylizacja samej ikony wewnątrz */
+                button[title="Dodaj do ulubionych"] span[data-testid="stIconMaterial"], 
+                button[title="Usuń z ulubionych"] span[data-testid="stIconMaterial"] {
+                    font-size: 28px !important; /* Rozmiar ikony */
+                    color: #5d3b87 !important;  /* Twój fiolet */
+                    vertical-align: middle !important;
+                }
+                
+                /* Styl dla nieaktywnego serca (gdy wybrano Brak) */
+                button[disabled] span[data-testid="stIconMaterial"] {
+                    font-size: 28px !important;
+                    color: #e0e0e0 !important; /* Szary */
+                }
+                </style>
+                """, unsafe_allow_html=True)
+
+                # --- LOGIKA DANYCH ---
+                current_user_idx = df_users.index[df_users['Email'] == st.session_state['user_email']].tolist()[0]
+                # Pobieramy ulubione z zabezpieczeniem, jeśli komórka jest pusta
+                fav_raw = df_users.at[current_user_idx, 'Ulubione']
+                current_fav_string = str(fav_raw) if pd.notna(fav_raw) else ""
+                my_favorites = [e.strip().lower() for e in current_fav_string.split(',') if '@' in e]
+
+                other_users_df = df_users[df_users['Email'] != st.session_state['user_email']]
+                
+                fav_list = []
+                regular_list = []
+                name_to_email_map = {}
+
+                for index, row in other_users_df.iterrows():
+                    display_name = f"{row['Imię']} {row['Nazwisko']}"
+                    email = row['Email'].strip().lower()
+                    name_to_email_map[display_name] = email
+                    
+                    if email in my_favorites:
+                        fav_list.append(display_name)
+                    else:
+                        regular_list.append(display_name)
+                
+                final_options = ["Brak"]
+                if fav_list:
+                    final_options.append("─── ULUBIENI ───")
+                    final_options.extend(sorted(fav_list))
+                if regular_list:
+                    final_options.append("─── POZOSTALI ───")
+                    final_options.extend(sorted(regular_list))
+                
+                # --- UKŁAD ---
+                # Wąska kolumna na ikonę (0.12 wystarczy na samą ikonkę)
+                c_sel, c_btn = st.columns([0.88, 0.12])
+                
+                with c_sel:
+                    second_preacher_name = st.selectbox("Drugi głosiciel", final_options)
+                
+                with c_btn:
+                    # Nie potrzebujemy tu st.write(""), margines załatwia CSS
+                    
+                    selected_email = name_to_email_map.get(second_preacher_name)
+                    
+                    if selected_email:
+                        if selected_email in my_favorites:
+                            # PEŁNE SERCE (Usuwanie)
+                            if st.button("", icon=":material/favorite:", help="Usuń z ulubionych"):
+                                my_favorites.remove(selected_email)
+                                new_fav_str = ",".join(my_favorites)
+                                df_users.at[current_user_idx, 'Ulubione'] = new_fav_str
+                                update_user_db(df_users)
+                                st.rerun()
+                        else:
+                            # PUSTE SERCE (Dodawanie)
+                            if st.button("", icon=":material/favorite_border:", help="Dodaj do ulubionych"):
+                                my_favorites.append(selected_email)
+                                new_fav_str = ",".join(my_favorites)
+                                df_users.at[current_user_idx, 'Ulubione'] = new_fav_str
+                                update_user_db(df_users)
+                                st.rerun()
+                    else:
+                        # Szare serce (placeholder)
+                        st.button("", icon=":material/favorite_border:", disabled=True)
 
             if selected_date:
                 if st.session_state.get('last_fetched_date') != selected_date:
@@ -815,19 +932,28 @@ def main():
                     is_joining = "Dołącz do" in slot_status
                     can_proceed = True
                     
-                    if is_joining and second_preacher_name != "Brak":
+                    if "───" in second_preacher_name:
+                        st.warning("To jest nagłówek sekcji. Wybierz konkretną osobę z listy.")
+                        can_proceed = False
+                    
+                    # 2. Walidacja slotu (Twoja stara logika)
+                    slot_status = available_slots[selected_hour]
+                    is_joining = "Dołącz do" in slot_status
+                    
+                    if is_joining and second_preacher_name != "Brak" and can_proceed:
                         st.error("⛔ Nie możesz zapisać drugiej osoby, ponieważ w tej godzinie jest już tylko 1 wolne miejsce.")
                         can_proceed = False
-                    elif is_joining:
+                    elif is_joining and can_proceed:
                          st.info(f"ℹ️ Dołączasz do: {slot_status.replace('Dołącz do: ', '')}")
 
+                    # Przycisk
                     if st.button("✅ Zapisz się", disabled=not can_proceed):
                         with st.spinner("Zapisywanie..."):
                             d_booking = datetime.datetime.combine(selected_date, datetime.time(0,0))
                             
                             sec_data = None
                             if second_preacher_name != "Brak":
-                                # Znajdujemy dane drugiego głosiciela (konstrukcja maski w locie)
+                                # TU JUŻ NIE MUSIMY USUWAĆ GWIAZDEK, BO NAZWISKO JEST CZYSTE
                                 mask_sec = (df_users['Imię'] + ' ' + df_users['Nazwisko']) == second_preacher_name
                                 sec_match = df_users[mask_sec]
                                 if not sec_match.empty:
