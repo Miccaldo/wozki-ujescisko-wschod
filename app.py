@@ -832,7 +832,7 @@ def main():
             /* --- LOGIKA STANÓW DLA SERCA --- */
 
             div[data-testid="stElementContainer"]{{
-                min-width: 22px;
+                min-width: 1.375rem;
             }}
             /* STAN: BRAK (type="secondary") */
             div[data-testid="stColumn"]:has(span#heart-marker) button[kind="secondary"] {{
