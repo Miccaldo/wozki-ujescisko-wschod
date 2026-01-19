@@ -60,7 +60,7 @@ st.markdown("""
         display: none !important;
     }
     h1, h2, h3 { color: #5d3b87; }
-    .block-container { padding-top: 2rem;
+    .block-container { padding-top: 2rem; }
     
     @media (max-width: 768px) {
         h1 {
@@ -75,8 +75,8 @@ st.markdown("""
         /* Opcjonalnie: zmniejszamy padding, żeby na telefonie było więcej miejsca */
         .block-container {
             padding-top: 0.5rem;
-            padding-left: 0.5rem;
-            padding-right: 0.5rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
         }
      }
     </style>
@@ -713,7 +713,7 @@ def main():
             ls.deleteItem(STORAGE_USER)
             st.rerun()
             
-        st.title("Służba przy wózku - zapisy 📝")
+        st.title("Służba przy wózku 📝")
         st.caption("Gdańsk Ujeścisko - Wschód")
         st.info("⬅️ Aby rozpocząć, wybierz siebie z listy w panelu po lewej stronie.")
         st.stop()
@@ -735,7 +735,7 @@ def main():
         
         today = datetime.date.today()
         
-        with st.expander(f"📅 Twoje zapisy w tym miesiącu ({today.month}/{today.year})", expanded=False):
+        with st.expander(f"📅 Twoje zapisy w tym miesiącu", expanded=False):
             with st.spinner("Pobieram Twoje zapisy..."):
                 df_my_events = get_user_events_for_month(today.year, today.month)
             
@@ -788,10 +788,13 @@ def main():
                     def format_hour_label(h):
                         time_range = f"{h}:00 - {h+1}:00"
                         status = available_slots[h]
-                        if status == "Wolne":
-                            return f"{time_range}  🟢 {status}"
-                        else:
-                            return f"{time_range}  🤝 {status}"
+                        icon = '🟢' if status == 'Wolne' else '🤝'
+                        
+                        target_length = 15
+                        chars_needed = target_length - len(time_range)
+                        padding = "\u00A0" * int(chars_needed * 1.8) 
+                        
+                        return f"{time_range}{padding}{icon} {status}"
 
                     selected_hour = st.selectbox("Wybierz godzinę", options=sorted_hours, format_func=format_hour_label)
                     
