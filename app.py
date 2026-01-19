@@ -789,81 +789,95 @@ def main():
 
         if request_type == "Zapis":
             st.subheader("📅 Zapis na służbę przy wózku")
+
+            # --- DEFINICJE SVG (Data URI) ---
+            # 1. SZARE PUSTE (Brak)
+            icon_empty_grey = "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z'%3E%3C/path%3E%3C/svg%3E"
             
-            st.markdown("""
+            # 2. FIOLETOWE PUSTE (Hover)
+            icon_empty_purple = "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235d3b87' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z'%3E%3C/path%3E%3C/svg%3E"
+            
+            # 3. FIOLETOWE PEŁNE (Ulubione)
+            icon_filled_purple = "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%235d3b87' stroke='%235d3b87' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z'%3E%3C/path%3E%3C/svg%3E"
+
+            st.markdown(f"""
             <style>
-            /* 1. RESET BAZOWY - USUWAMY RAMKI I TŁA */
-            div[data-testid="stColumn"] button {
+            /* 
+               1. SELEKTOR IZOLOWANY 
+               Działa TYLKO na przycisk, który jest w kolumnie obok znacznika #heart-marker.
+               Nie zepsuje innych przycisków w aplikacji.
+            */
+            div[data-testid="stColumn"]:has(span#heart-marker) button {{
                 border: none !important;
-                background: transparent !important;
+                background-color: transparent !important;
                 box-shadow: none !important;
                 padding: 0 !important;
+                margin: 0 !important;
                 height: 100%;
                 width: 100%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-
-            /* 2. STYLIZACJA TEKSTU (SERCA) - WSPÓLNA */
-            div[data-testid="stColumn"] button p {
-                font-size: 36px !important; /* Duży rozmiar */
-                line-height: 1 !important;
-                margin: 0 !important;
-                padding-top: 6px !important; /* Korekta pionowa */
+                min-height: 42px;
                 
-                /* KLUCZOWE: Wymuszamy zwykły font, żeby telefon nie zrobił z tego czerwonej emotki */
-                font-family: Arial, sans-serif !important; 
-                font-weight: bold !important;
-            }
+                /* Tło SVG */
+                background-repeat: no-repeat !important;
+                background-position: center !important;
+                /* Zmniejszone do 22px, żeby nie ucinało po bokach */
+                background-size: 22px 22px !important; 
+            }}
+            
+            /* Ukrywamy tekst wewnątrz TEGO KONKRETNEGO przycisku */
+            div[data-testid="stColumn"]:has(span#heart-marker) button p {{
+                display: none !important;
+            }}
 
-            /* 3. STAN: BRAK (Szare serce) - type="secondary" */
-            button[kind="secondary"] p {
-                color: #d1d5db !important; /* Jasny szary */
-                transition: color 0.3s;
-            }
-            /* Po najechaniu robi się lekko fioletowe */
-            button[kind="secondary"]:hover p {
-                color: #5d3b87 !important;
-            }
+            /* --- LOGIKA STANÓW DLA SERCA --- */
 
-            /* 4. STAN: ULUBIONE (Fioletowe serce) - type="primary" */
-            button[kind="primary"] p {
-                color: #5d3b87 !important; /* Twój fiolet */
-            }
-            /* Usuwamy tło primary */
-            button[kind="primary"]:hover,
-            button[kind="primary"]:active,
-            button[kind="primary"]:focus {
-                background: transparent !important;
-                color: #5d3b87 !important;
-            }
+            div[data-testid="stElementContainer"]{{
+                min-width: 22px;
+            }}
+            /* STAN: BRAK (type="secondary") */
+            div[data-testid="stColumn"]:has(span#heart-marker) button[kind="secondary"] {{
+                background-image: url("{icon_empty_grey}") !important;
+                transition: background-image 0.2s;
+            }}
+            /* Hover */
+            div[data-testid="stColumn"]:has(span#heart-marker) button[kind="secondary"]:hover {{
+                background-image: url("{icon_empty_purple}") !important;
+            }}
 
-            /* 5. DISABLED */
-            button[disabled] p {
-                color: #f3f4f6 !important; /* Bardzo blady */
-            }
-            button[disabled]{
+            /* STAN: ULUBIONE (type="primary") */
+            div[data-testid="stColumn"]:has(span#heart-marker) button[kind="primary"] {{
+                background-image: url("{icon_filled_purple}") !important;
+            }}
+            /* Reset tła systemowego primary */
+            div[data-testid="stColumn"]:has(span#heart-marker) button[kind="primary"]:hover,
+            div[data-testid="stColumn"]:has(span#heart-marker) button[kind="primary"]:focus {{
+                background-color: transparent !important;
+            }}
+
+            /* STAN: DISABLED */
+            div[data-testid="stColumn"]:has(span#heart-marker) button[disabled] {{
+                background-image: url("{icon_empty_grey}") !important;
+                opacity: 0.3 !important;
                 pointer-events: none !important;
-            }
+            }}
 
-            /* 6. FIX NA MOBILE */
-            @media (max-width: 640px) {
-                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] {
+            /* 2. FIX NA MOBILE */
+            @media (max-width: 640px) {{
+                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] {{
                     flex-direction: row !important;
                     flex-wrap: nowrap !important;
-                }
-                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+                }}
+                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {{
                     width: 80% !important;
                     min-width: 80% !important;
                     flex: 1 1 auto !important;
-                }
-                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+                }}
+                [data-testid="stColumn"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {{
                     width: 20% !important;
                     min-width: 20% !important;
                     flex: 1 1 auto !important;
-                }
-            }
+                }}
+            }}
             </style>
             """, unsafe_allow_html=True)
 
@@ -897,10 +911,10 @@ def main():
             
             final_options = ["Brak"]
             if fav_list:
-                final_options.append("─── ULUBIONE ───")
+                final_options.append("─── ULUBIENI ───")
                 final_options.extend(sorted(fav_list))
             if regular_list:
-                final_options.append("─────────────")
+                final_options.append("─── POZOSTALI ───")
                 final_options.extend(sorted(regular_list))
             
             # --- PRAWA STRONA ---
@@ -911,30 +925,33 @@ def main():
                     second_preacher_name = st.selectbox("Drugi głosiciel", final_options)
                 
                 with c_btn:
+                    # --- WAŻNE: ZNACZNIK DLA CSS ---
+                    # To pozwala nam celować stylami TYLKO w ten jeden przycisk w tej kolumnie
+                    st.markdown('<span id="heart-marker"></span>', unsafe_allow_html=True)
+                    
                     selected_email = name_to_email_map.get(second_preacher_name)
                     
                     if selected_email:
+                        # LOGIKA PYTHON: Sprawdzamy listę ulubionych
+                        # type="primary" -> FIOLETOWE PEŁNE
+                        # type="secondary" -> SZARE PUSTE
+                        
                         if selected_email in my_favorites:
-                            # --- STAN: JEST W ULUBIONYCH ---
-                            # Dajemy type="primary" -> CSS zrobi FIOLETOWE
-                            if st.button("❤", type="primary", help="Usuń z ulubionych"):
+                            if st.button(" ", type="primary", help="Usuń z ulubionych"):
                                 my_favorites.remove(selected_email)
                                 new_fav_str = ",".join(my_favorites)
                                 df_users.at[current_user_idx, 'Ulubione'] = new_fav_str
                                 update_user_db(df_users)
                                 st.rerun()
                         else:
-                            # --- STAN: NIE JEST W ULUBIONYCH ---
-                            # Dajemy type="secondary" -> CSS zrobi SZARE
-                            if st.button("❤", type="secondary", help="Dodaj do ulubionych"):
+                            if st.button(" ", type="secondary", help="Dodaj do ulubionych"):
                                 my_favorites.append(selected_email)
                                 new_fav_str = ",".join(my_favorites)
                                 df_users.at[current_user_idx, 'Ulubione'] = new_fav_str
                                 update_user_db(df_users)
                                 st.rerun()
                     else:
-                        # Disabled
-                        st.button("❤", disabled=True)
+                        st.button(" ", disabled=True)
 
             if selected_date:
                 if st.session_state.get('last_fetched_date') != selected_date:
