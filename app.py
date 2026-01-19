@@ -915,7 +915,7 @@ def main():
                 final_options.append("─── ULUBIONE ───")
                 final_options.extend(sorted(fav_list))
             if regular_list:
-                final_options.append("───")
+                final_options.append("─")
                 final_options.extend(sorted(regular_list))
             
             # --- PRAWA STRONA ---
