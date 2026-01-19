@@ -619,6 +619,19 @@ def main():
     if df_users.empty:
         st.error("Nie udało się załadować listy użytkowników z Arkusza ACL.")
         st.stop()
+
+    components.html("""
+    <script>
+        function disableKeyboardOnMobile() {
+            const inputs = window.parent.document.querySelectorAll('div[data-baseweb="base-input"] input');
+            inputs.forEach(input => {
+                input.setAttribute('readonly', 'readonly');
+                input.setAttribute('inputmode', 'none');
+            });
+        }
+        setInterval(disableKeyboardOnMobile, 500);
+    </script>
+    """, height=0)
         
     # --- CZYSZCZENIE DANYCH (Bez tworzenia kolumny Display) ---
     # Upewniamy się, że imię i nazwisko to stringi
