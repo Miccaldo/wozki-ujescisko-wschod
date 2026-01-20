@@ -1086,7 +1086,7 @@ def main():
                     is_joining = "Dołącz do" in slot_status
                     can_proceed = True
                     
-                    if "───" in second_preacher_name:
+                    if "─" in second_preacher_name:
                         st.warning("To jest nagłówek sekcji. Wybierz konkretną osobę z listy.")
                         can_proceed = False
                     
