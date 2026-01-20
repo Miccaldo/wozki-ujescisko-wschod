@@ -388,7 +388,7 @@ def book_event(date_obj, hour, second_preacher_obj=None):
 
 def cancel_booking(date_obj, hour, delete_entirely=False):
     """
-    Usuwa użytkownika z wydarzenia.
+    Usuwa użytkownika z wydarzenia i powiadamia grupę.
     delete_entirely: Jeśli True i użytkownik jest organizatorem, usuwa całe wydarzenie (nawet z partnerem).
     """
     service = get_calendar_service()
@@ -436,13 +436,30 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
     if user_email not in emails:
         return False
 
+    # --- Przygotowanie treści alertu dla innych (wspólne) ---
+    def send_broadcast_alert(excluded_list):
+        others = get_emails_for_day(date_part, exclude_hour=hour, exclude_emails=excluded_list)
+        if others:
+            subj_alert = f"Służba przy wózku - Zmiana w grafiku ({date_part.strftime('%d-%m-%Y')})"
+            body_alert = (f"Cześć,\n\n"
+                          f"Informujemy o zmianie w grafiku w dniu, w którym pełnisz służbę.\n"
+                          f"Zwolniło się miejsce o godzinie:\n"
+                          f"<b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n")
+            for recipient in others:
+                send_notification_email(recipient, subj_alert, body_alert)
+
+    # SCENARIUSZ 1: Organizator (jest pierwszy)
     if emails[0] == user_email:
         has_partner = len(emails) > 1
         
+        # 1A. Jest sam -> Usuwa
         if not has_partner:
             service.events().delete(calendarId=CALENDAR_ID, eventId=target_event['id']).execute()
+            # Alert do innych (wykluczamy tylko mnie)
+            send_broadcast_alert([user_email])
             return True
             
+        # 1B. Ma partnera i usuwa całość
         if has_partner and delete_entirely:
             service.events().delete(calendarId=CALENDAR_ID, eventId=target_event['id']).execute()
             
@@ -455,11 +472,13 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
                     f"Termin został usunięty z grafiku.")
             send_notification_email(partner_email, subj, body)
             
+            # Alert do innych (wykluczamy mnie i partnera)
+            send_broadcast_alert([user_email, partner_email])
             return True
             
+        # 1C. Ma partnera i usuwa tylko siebie
         if has_partner and not delete_entirely:
             new_desc = f"email:{emails[1]}"
-            
             new_title = title
             if ' i ' in title:
                 parts = title.split(' i ')
@@ -468,7 +487,6 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
             
             target_event['summary'] = new_title
             target_event['description'] = new_desc
-            
             service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
             
             partner_email = emails[1]
@@ -480,18 +498,19 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
                     f"Twój termin jest otwarty na współpracę z innym głosicielem.")
             send_notification_email(partner_email, subj, body)
 
+            # Alert do innych
+            send_broadcast_alert([user_email, partner_email])
             return True
 
+    # SCENARIUSZ 2: Partner (jest drugi)
     elif len(emails) > 1 and emails[1] == user_email:
         new_desc = f"email:{emails[0]}"
-
         new_title = title
         if ' i ' in title:
             new_title = title.split(' i ')[0].strip()
             
         target_event['summary'] = new_title
         target_event['description'] = new_desc
-        
         service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
         
         organizer_email = emails[0]
@@ -503,6 +522,8 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
                 f"Twój termin jest otwarty na współpracę z innym głosicielem.")
         send_notification_email(organizer_email, subj, body)
         
+        # Alert do innych (wykluczamy mnie i organizatora)
+        send_broadcast_alert([user_email, organizer_email])
         return True
             
     return False
@@ -713,6 +734,52 @@ def sync_users_with_calendar():
 
     except Exception as e:
         return False, f"Błąd synchronizacji: {e}"
+
+def get_emails_for_day(date_obj, exclude_hour=None, exclude_emails=None):
+    """Pobiera listę emaili wszystkich osób, które mają dyżur w tym dniu."""
+    service = get_calendar_service()
+    tz = ZoneInfo("Europe/Warsaw")
+    
+    if isinstance(date_obj, datetime.datetime):
+        d = date_obj.date()
+    else:
+        d = date_obj
+        
+    start_of_day = datetime.datetime.combine(d, datetime.time(0, 0), tzinfo=tz)
+    end_of_day = datetime.datetime.combine(d, datetime.time(23, 59, 59), tzinfo=tz)
+
+    events = service.events().list(
+        calendarId=CALENDAR_ID, 
+        timeMin=start_of_day.isoformat(), 
+        timeMax=end_of_day.isoformat(),
+        singleEvents=True
+    ).execute().get('items', [])
+    
+    all_emails = set()
+    
+    if exclude_emails is None:
+        exclude_emails = []
+        
+    for event in events:
+        # Pomijamy eventy bez opisu (np. ramy czasowe)
+        desc = event.get('description', '')
+        if 'email:' not in desc: continue
+        
+        # Jeśli podano exclude_hour, pomijamy tę godzinę (bo tam właśnie ktoś zrezygnował)
+        start_str = event['start'].get('dateTime')
+        if start_str:
+            dt_obj = datetime.datetime.fromisoformat(start_str).astimezone(tz)
+            if exclude_hour is not None and dt_obj.hour == exclude_hour:
+                continue
+
+        clean_desc = desc.replace('email:', '')
+        emails = [e.strip().lower() for e in clean_desc.split(',')]
+        
+        for e in emails:
+            if e not in exclude_emails:
+                all_emails.add(e)
+                
+    return list(all_emails)
 
 def main():
     ls = LocalStorage()
