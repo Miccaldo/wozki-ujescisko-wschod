@@ -18,7 +18,9 @@ st.set_page_config(page_title="Służba przy wózku", page_icon="👥", layout="
 CALENDAR_ID = st.secrets["calendar_id"]
 SHEET_ID = st.secrets["sheet_id"]
 STORAGE_USER = 'wozki_stored_user'
-print(CALENDAR_ID, SHEET_ID)
+IGNORED_EMAILS = [
+    CALENDAR_ID.lower()
+]
 
 st.markdown("""
     <style>
@@ -122,6 +124,34 @@ def get_users_db():
             df['Ulubione'] = ''
         else:
             df['Ulubione'] = df['Ulubione'].fillna('').astype(str)
+
+        bot_email = dict(st.secrets["connections"]["gsheets"])["client_email"].lower()
+        full_blacklist = [e.lower() for e in IGNORED_EMAILS] + [bot_email]
+
+        df = df[~df['Email'].str.lower().isin(full_blacklist)]
+
+        def make_sort_key(text):
+            """Zamienia polskie znaki na takie, które sortują się poprawnie."""
+            # Dodajemy tyldę (~), aby "Ł" było po "L", ale przed "M"
+            # ASCII: l < l~ < m
+            chars = {
+                'ą': 'a~', 'ć': 'c~', 'ę': 'e~', 'ł': 'l~', 'ń': 'n~', 
+                'ó': 'o~', 'ś': 's~', 'ź': 'z~', 'ż': 'z~~',
+                'Ą': 'A~', 'Ć': 'C~', 'Ę': 'E~', 'Ł': 'L~', 'Ń': 'N~', 
+                'Ó': 'O~', 'Ś': 'S~', 'Ź': 'Z~', 'Ż': 'Z~~'
+            }
+            s = str(text)
+            for pol, lat in chars.items():
+                s = s.replace(pol, lat)
+            return s.lower()
+
+        df['_sort_key'] = df['Imię'].apply(make_sort_key) + df['Nazwisko'].apply(make_sort_key)
+        
+        # Sortujemy po kluczu
+        df = df.sort_values(by='_sort_key', ignore_index=True)
+        
+        # Usuwamy klucz (nie jest potrzebny w aplikacji)
+        del df['_sort_key']
 
         return df
     except Exception as e:
@@ -613,6 +643,76 @@ def send_notification_email(to_email, subject, body):
         print(f"Błąd wysyłania e-maila: {e}")
         return False
 
+def sync_users_with_calendar():
+    """
+    Synchronizuje Arkusz (ACL) z uprawnieniami Kalendarza Google.
+    Zwraca (bool, message).
+    """
+    service = get_calendar_service()
+    
+    try:
+        # 1. POBIERZ Z KALENDARZA
+        acl_result = service.acl().list(calendarId=CALENDAR_ID).execute()
+        calendar_emails = set()
+        
+        for item in acl_result.get('items', []):
+            if item.get('scope', {}).get('type') == 'user':
+                email = item.get('scope', {}).get('value', '').lower().strip()
+                calendar_emails.add(email)
+
+        # 2. POBIERZ Z ARKUSZA
+        df_sheet = get_users_db()
+        # Tworzymy kopię do porównań (żeby nie psuć oryginału)
+        df_sheet['Email_Norm'] = df_sheet['Email'].astype(str).str.lower().str.strip()
+        sheet_emails = set(df_sheet['Email_Norm'].unique())
+        
+        # Ignoruj bota (żeby go nie usunąć, jeśli nie ma go w ACL kalendarza wprost)
+        my_bot_email = dict(st.secrets["connections"]["gsheets"])["client_email"].lower()
+        
+        # 3. PORÓWNANIE
+        to_add = calendar_emails - sheet_emails
+        to_remove = {e for e in (sheet_emails - calendar_emails) if e != my_bot_email}
+        
+        if not to_add and not to_remove:
+            return True, "Bazy są zgodne."
+
+        # 4. ZASTOSOWANIE ZMIAN
+        
+        # Usuwanie
+        if to_remove:
+            df_sheet = df_sheet[~df_sheet['Email_Norm'].isin(to_remove)]
+        
+        # Dodawanie
+        new_rows = []
+        for email in to_add:
+            new_rows.append({
+                'Email': email,
+                'Rola': 'reader', # Domyślna rola
+                'Typ': 'user',
+                'Imię': '',
+                'Nazwisko': '',
+                'Płeć': 'M',
+                'Ulubione': ''
+            })
+            
+        if new_rows:
+            df_new = pd.DataFrame(new_rows)
+            # Jeśli df_sheet jest pusty, to po prostu df_new, inaczej concat
+            if df_sheet.empty:
+                df_sheet = df_new
+            else:
+                df_sheet = pd.concat([df_sheet, df_new], ignore_index=True)
+        
+        # Sprzątanie kolumn pomocniczych
+        if 'Email_Norm' in df_sheet.columns:
+            del df_sheet['Email_Norm']
+            
+        # 5. ZAPIS DO BAZY
+        update_user_db(df_sheet)
+        return True, f"Zaktualizowano! Dodano: {len(to_add)}, Usunięto: {len(to_remove)}"
+
+    except Exception as e:
+        return False, f"Błąd synchronizacji: {e}"
 
 def main():
     ls = LocalStorage()
@@ -1095,8 +1195,20 @@ def main():
         st.title("🛠️ Lista głosicieli")
         
         if st.button("Odśwież dane", icon=":material/sync:"):
-            st.cache_data.clear()
-            st.rerun()
+            with st.spinner("Synchronizuję z Kalendarzem Google..."):
+                success, msg = sync_users_with_calendar()
+                
+                if success:
+                    st.cache_data.clear() # Czyścimy cache Streamlit
+                    
+                    if "Zaktualizowano" in msg:
+                        st.success(msg)
+                    else:
+                        st.info("Dane są aktualne.")
+                        time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(msg)
             
         edited_df = st.data_editor(df_users, num_rows="dynamic")
         
