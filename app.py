@@ -13,7 +13,7 @@ import smtplib
 from email.message import EmailMessage
 import re
 
-st.set_page_config(page_title="Służba przy wózku", page_icon="👥", layout="centered")
+st.set_page_config(page_title="Wózki Ujeścisko Wschód", page_icon="👥", layout="centered")
 
 CALENDAR_ID = st.secrets["calendar_id"]
 SHEET_ID = st.secrets["sheet_id"]
