@@ -101,6 +101,19 @@ window.addEventListener('load', function() {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+def make_sort_key(text):
+    """Zamienia polskie znaki na takie, które sortują się poprawnie."""
+    chars = {
+        'ą': 'a~', 'ć': 'c~', 'ę': 'e~', 'ł': 'l~', 'ń': 'n~', 
+        'ó': 'o~', 'ś': 's~', 'ź': 'z~', 'ż': 'z~~',
+        'Ą': 'A~', 'Ć': 'C~', 'Ę': 'E~', 'Ł': 'L~', 'Ń': 'N~', 
+        'Ó': 'O~', 'Ś': 'S~', 'Ź': 'Z~', 'Ż': 'Z~~'
+    }
+    s = str(text)
+    for pol, lat in chars.items():
+        s = s.replace(pol, lat)
+    return s.lower()
+
 def get_users_db():
     try:
         df = conn.read(worksheet="ACL", usecols=[0, 1, 2, 3, 4, 5, 6], ttl=60)
@@ -120,19 +133,6 @@ def get_users_db():
         full_blacklist = [e.lower() for e in IGNORED_EMAILS] + [bot_email]
 
         df = df[~df['Email'].str.lower().isin(full_blacklist)]
-
-        def make_sort_key(text):
-            """Zamienia polskie znaki na takie, które sortują się poprawnie."""
-            chars = {
-                'ą': 'a~', 'ć': 'c~', 'ę': 'e~', 'ł': 'l~', 'ń': 'n~', 
-                'ó': 'o~', 'ś': 's~', 'ź': 'z~', 'ż': 'z~~',
-                'Ą': 'A~', 'Ć': 'C~', 'Ę': 'E~', 'Ł': 'L~', 'Ń': 'N~', 
-                'Ó': 'O~', 'Ś': 'S~', 'Ź': 'Z~', 'Ż': 'Z~~'
-            }
-            s = str(text)
-            for pol, lat in chars.items():
-                s = s.replace(pol, lat)
-            return s.lower()
 
         df['_sort_key'] = df['Imię'].apply(make_sort_key) + df['Nazwisko'].apply(make_sort_key)
         
@@ -790,7 +790,7 @@ def main():
     # Tworzymy pomocniczą listę stringów TYLKO do wyświetlania w UI
     # Nie dodajemy jej do df_users na stałe
     # Używamy zip, żeby iterować szybciej niż iterrows
-    all_full_names = sorted([f"{i} {n}" for i, n in zip(df_users['Imię'], df_users['Nazwisko'])])
+    all_full_names = [f"{i} {n}" for i, n in zip(df_users['Imię'], df_users['Nazwisko'])]
 
     # --- SILENT AUTO-LOGIN ---
     stored_email = ls.getItem(STORAGE_USER)
@@ -1045,10 +1045,10 @@ def main():
             
             if fav_list:
                 final_options.append("─── ULUBIONE ───")
-                final_options.extend(sorted(fav_list))
+                final_options.extend(sorted(fav_list, key=make_sort_key))
             if regular_list:
                 final_options.append("─")
-                final_options.extend(sorted(regular_list))
+                final_options.extend(sorted(regular_list, key=make_sort_key))
             
             # --- PRAWA STRONA ---
             with c_main_right:
