@@ -165,8 +165,15 @@ def get_calendar_service():
     return service
 
 def parse_hours_from_title(title):
-    """Wyciąga godziny z tytułu wydarzenia cyklicznego np. '7:00-18:00'."""
-    match = re.search(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', title)
+    """
+    Wyciąga godziny z tytułu wydarzenia (np. '7:00-18:00', '08:00 - 20:00').
+    Obsługuje spacje i różne myślniki.
+    """
+    if not title:
+        return None, None
+    
+    match = re.search(r'(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})', title)
+    
     if match:
         return match.group(1), match.group(2)
     return None, None
