@@ -77,8 +77,8 @@ st.markdown("""
         /* Opcjonalnie: zmniejszamy padding, żeby na telefonie było więcej miejsca */
         .block-container {
             padding-top: 0.5rem;
-            padding-left: 1rem;
-            padding-right: 1rem;
+            padding-left: 1.25rem;
+            padding-right: 1.25rem;
         }
      }
     </style>
@@ -497,9 +497,6 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
                     f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
                     f"Twój termin jest otwarty na współpracę z innym głosicielem.")
             send_notification_email(partner_email, subj, body)
-
-            # Alert do innych
-            send_broadcast_alert([user_email, partner_email])
             return True
 
     # SCENARIUSZ 2: Partner (jest drugi)
@@ -521,41 +518,28 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
                 f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
                 f"Twój termin jest otwarty na współpracę z innym głosicielem.")
         send_notification_email(organizer_email, subj, body)
-        
-        # Alert do innych (wykluczamy mnie i organizatora)
-        send_broadcast_alert([user_email, organizer_email])
         return True
             
     return False
 
-def get_user_events_for_month(year, month):
+def get_user_upcoming_events(days_ahead=30):
+    """Pobiera listę dyżurów od dzisiaj na 30 dni w przód."""
     service = get_calendar_service()
     user_email = st.session_state['user_email'].strip().lower()
     tz = ZoneInfo("Europe/Warsaw")
 
-    # 1. Obliczamy koniec miesiąca (Początek następnego)
-    if month == 12:
-        end_date = datetime.datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=tz)
-    else:
-        end_date = datetime.datetime(year, month + 1, 1, 0, 0, 0, tzinfo=tz)
-
-    # 2. Obliczamy start (To jest ta zmiana)
+    # 1. Start: Dzisiaj od północy (żeby pokazać też dzisiejsze dyżury)
     now = datetime.datetime.now(tz)
-    
-    # Jeśli sprawdzamy bieżący miesiąc i rok -> startujemy od DZISIAJ (od północy)
-    if year == now.year and month == now.month:
-        start_date = datetime.datetime(year, month, now.day, 0, 0, 0, tzinfo=tz)
-    else:
-        # W innym przypadku (np. przyszły miesiąc) startujemy od 1. dnia
-        start_date = datetime.datetime(year, month, 1, 0, 0, 0, tzinfo=tz)
+    start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    time_min = start_date.isoformat()
-    time_max = end_date.isoformat()
+    # 2. Koniec: Dzisiaj + 30 dni (do końca dnia)
+    end_date = start_date + datetime.timedelta(days=days_ahead)
+    end_date = end_date.replace(hour=23, minute=59, second=59)
 
     events_result = service.events().list(
         calendarId=CALENDAR_ID, 
-        timeMin=time_min, 
-        timeMax=time_max,
+        timeMin=start_date.isoformat(), 
+        timeMax=end_date.isoformat(),
         singleEvents=True,
         orderBy='startTime'
     ).execute()
@@ -575,19 +559,14 @@ def get_user_events_for_month(year, month):
             if not start_str: continue 
             
             dt_obj = datetime.datetime.fromisoformat(start_str).astimezone(tz)
-            
-            # Formatowanie daty i godziny
             date_str = dt_obj.strftime("%d-%m-%Y") 
             time_str = f"{dt_obj.hour}:00 - {dt_obj.hour + 1}:00"
-
             title = event.get('summary', '')
-            
-            display_info = title
 
             my_events.append({
                 "Data": date_str,
                 "Godzina": time_str,
-                "Szczegóły (Kto)": display_info
+                "Szczegóły (Kto)": title
             })
             
     return pd.DataFrame(my_events)
@@ -932,9 +911,9 @@ def main():
         
         today = datetime.date.today()
         
-        with st.expander(f"📅 Twoje zapisy w tym miesiącu", expanded=False):
+        with st.expander(f"📅 Twoje zapisy na najbliższe 30 dni", expanded=False):
             with st.spinner("Pobieram Twoje zapisy..."):
-                df_my_events = get_user_events_for_month(today.year, today.month)
+                df_my_events = get_user_upcoming_events()
             
             if not df_my_events.empty:
                 st.dataframe(
@@ -948,7 +927,7 @@ def main():
                     }
                 )
             else:
-                st.info("Nie masz jeszcze żadnych zapisów w tym miesiącu.")
+                st.info("Nie masz jeszcze żadnych zapisów.")
         
         with st.expander("📝 Formularz zgłoszeniowy", expanded=True):
             st.selectbox("Lokalizacja", ["Piotrkowska"], index=0, disabled=True)
