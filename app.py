@@ -25,22 +25,18 @@ IGNORED_EMAILS = [
 st.markdown("""
     <style>
 
-/* Główny header aplikacji */
 [data-testid="stAppHeader"] {
     display: none;
 }
 
-/* Ukrywa status ładowania (ludzik / pływający gif) */
 [data-testid="stStatusWidget"] {
     display: none !important;
 }
 
-/* Ukrywa branding Streamlit w prawym górnym rogu */
 [data-testid="stDecoration"] {
     display: none !important;
 }
 
-/* Ukrywa branding Streamlit w prawym górnym rogu */
 [data-testid="stMainMenu"] {
     display: none !important;
 }
@@ -66,15 +62,15 @@ st.markdown("""
     
     @media (max-width: 768px) {
         h1 {
-            font-size: 1.8rem !important; /* Zmniejszamy tytuł */
+            font-size: 1.8rem !important;
         }
         h2 {
-            font-size: 1.4rem !important; /* Zmniejszamy podtytuły */
+            font-size: 1.4rem !important;
         }
         h3 {
             font-size: 1.2rem !important;
         }
-        /* Opcjonalnie: zmniejszamy padding, żeby na telefonie było więcej miejsca */
+
         .block-container {
             padding-top: 0.5rem;
             padding-left: 1.25rem;
@@ -87,19 +83,16 @@ st.markdown("""
 components.html("""
 <script>
 window.addEventListener('load', function() {
-    // Ukrywa header
+
     const header = document.querySelector('[data-testid="stAppHeader"]');
     if(header) { header.style.display = 'none'; }
 
-    // Ukrywa status / ludzik
     const status = document.querySelector('[data-testid="stStatusWidget"]');
     if(status) { status.style.display = 'none'; }
 
-    // Ukrywa czarny Manage App
     const manageBtn = document.querySelector('button[aria-label="Manage app"]');
     if(manageBtn) { manageBtn.style.display = 'none'; }
 
-    // Ukrywa branding w prawym górnym rogu
     const brand = document.querySelector('[data-testid="stDecoration"]');
     if(brand) { brand.style.display = 'none'; }
 });
@@ -110,7 +103,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_users_db():
     try:
-        # Zmieniamy usecols na [0, 1, 2, 3, 4, 5, 6] (doszło Ulubione)
         df = conn.read(worksheet="ACL", usecols=[0, 1, 2, 3, 4, 5, 6], ttl=60)
 
         df['Imię'] = df['Imię'].astype(str).str.strip()
@@ -119,7 +111,6 @@ def get_users_db():
         if 'Płeć' not in df.columns: df['Płeć'] = 'M'
         else: df['Płeć'] = df['Płeć'].fillna('M').astype(str).str.upper().str.strip()
 
-        # Obsługa kolumny Ulubione
         if 'Ulubione' not in df.columns:
             df['Ulubione'] = ''
         else:
@@ -132,8 +123,6 @@ def get_users_db():
 
         def make_sort_key(text):
             """Zamienia polskie znaki na takie, które sortują się poprawnie."""
-            # Dodajemy tyldę (~), aby "Ł" było po "L", ale przed "M"
-            # ASCII: l < l~ < m
             chars = {
                 'ą': 'a~', 'ć': 'c~', 'ę': 'e~', 'ł': 'l~', 'ń': 'n~', 
                 'ó': 'o~', 'ś': 's~', 'ź': 'z~', 'ż': 'z~~',
@@ -147,10 +136,8 @@ def get_users_db():
 
         df['_sort_key'] = df['Imię'].apply(make_sort_key) + df['Nazwisko'].apply(make_sort_key)
         
-        # Sortujemy po kluczu
         df = df.sort_values(by='_sort_key', ignore_index=True)
         
-        # Usuwamy klucz (nie jest potrzebny w aplikacji)
         del df['_sort_key']
 
         return df
@@ -436,7 +423,6 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
     if user_email not in emails:
         return False
 
-    # --- Przygotowanie treści alertu dla innych (wspólne) ---
     def send_broadcast_alert(excluded_list):
         others = get_emails_for_day(date_part, exclude_hour=hour, exclude_emails=excluded_list)
         if others:
