@@ -101,6 +101,79 @@ window.addEventListener('load', function() {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- HELPERY DO IDENTYFIKACJI PO NAZWISKU ---
+
+def normalize_string(s):
+    """Pomocnicza: zamienia na małe litery i usuwa zbędne spacje."""
+    return str(s).strip().lower()
+
+def get_participants_from_title(title, df_users):
+    """
+    Identyfikuje osoby w tytule na podstawie:
+    1. Pełnego nazwiska (musi wystąpić w całości).
+    2. Dwóch pierwszych liter imienia (musi pasować początek słowa).
+    """
+    if not title:
+        return [], False
+        
+    # 1. Dzielimy tytuł na osoby (separatory: " i ", "+", "&", ",")
+    # Np. "Kowalski Jan i Nowak Danusia" -> ["Kowalski Jan", "Nowak Danusia"]
+    parts = re.split(r'\s+(?:i|\+|&|,)\s+', title)
+    
+    found_emails = []
+    has_unknown = False
+    
+    # Cache'ujemy dane z bazy dla szybkości (żeby nie robić .lower() w pętli tysiąc razy)
+    # Lista krotek: (email, nazwisko_low, imie_prefix_low, imie_low)
+    users_data = []
+    for _, row in df_users.iterrows():
+        n = normalize_string(row['Nazwisko'])
+        i = normalize_string(row['Imię'])
+        if n and i: # Pomijamy puste rekordy
+            users_data.append({
+                'email': row['Email'].strip().lower(),
+                'last': n,
+                'first_2': i[:2], # Pierwsze 2 litery
+                'first_full': i   # Pełne imię (do debugowania lub ścisłego matchu)
+            })
+
+    # 2. Analizujemy każdą "osobę" z tytułu
+    for part in parts:
+        clean_part = normalize_string(part)
+        
+        # Rozbijamy fragment na słowa, np. "nowak danusia" -> {"nowak", "danusia"}
+        # Używamy set/list słów, żeby uniknąć sytuacji, gdzie "Lis" pasuje do "Lisowski"
+        part_words = re.findall(r'\w+', clean_part) 
+        
+        match_found = None
+        
+        for user in users_data:
+            # WARUNEK 1: Nazwisko musi być jednym ze słów w tytule
+            if user['last'] in part_words:
+                
+                # WARUNEK 2: Któreś z POZOSTAŁYCH słów musi zaczynać się od 2 liter imienia
+                # Usuwamy nazwisko z listy słów do sprawdzenia imienia
+                other_words = [w for w in part_words if w != user['last']]
+                
+                for word in other_words:
+                    if word.startswith(user['first_2']):
+                        match_found = user['email']
+                        break
+            
+            if match_found:
+                break
+        
+        if match_found:
+            found_emails.append(match_found)
+        else:
+            # Jeśli nie znaleziono w bazie, a fragment wygląda na nazwisko (nie jest pusty/cyfrą)
+            # Ignorujemy krótkie śmieci i same godziny (np. "12:00")
+            if len(clean_part) > 2 and not re.search(r'\d:', clean_part):
+                has_unknown = True
+
+    # Usuwamy duplikaty (na wypadek dziwnych błędów)
+    return list(set(found_emails)), has_unknown
+
 def make_sort_key(text):
     """Zamienia polskie znaki na takie, które sortują się poprawnie."""
     chars = {
@@ -180,15 +253,13 @@ def parse_hours_from_title(title):
 
 def get_slots_for_day(date_obj):
     """
-    Zwraca słownik: {godzina: 'status'}, gdzie status to 'Wolne' lub 'Dołącz do: Imię Nazwisko'.
+    Sprawdza dostępność parsując Imiona i Nazwiska z tytułów.
     """
     service = get_calendar_service()
-    tz = ZoneInfo("Europe/Warsaw")
+    df_users = get_users_db() # Pobieramy bazę do identyfikacji
     
-    if isinstance(date_obj, datetime.datetime):
-        d = date_obj.date()
-    else:
-        d = date_obj
+    tz = ZoneInfo("Europe/Warsaw")
+    d = date_obj.date() if isinstance(date_obj, datetime.datetime) else date_obj
     
     start_of_day = datetime.datetime.combine(d, datetime.time(0, 0), tzinfo=tz)
     end_of_day = datetime.datetime.combine(d, datetime.time(23, 59, 59), tzinfo=tz)
@@ -203,74 +274,66 @@ def get_slots_for_day(date_obj):
     
     events = events_result.get('items', [])
     
+    # 1. Szukanie ram czasowych
     main_event = None
     start_h, end_h = None, None
-
     for event in events:
-        title = event.get('summary', '')
-        s, e = parse_hours_from_title(title)
+        s, e = parse_hours_from_title(event.get('summary', ''))
         if s and e:
             main_event = event
-            start_h = int(s.split(':')[0])
-            end_h = int(e.split(':')[0])
+            start_h, end_h = int(s.split(':')[0]), int(e.split(':')[0])
             break
     
-    if not main_event:
-        return {}, []
+    if not main_event: return {}, []
 
     all_slots = range(start_h, end_h)
-    
     available_slots = {}
     my_booked_hours = []
-    
     slot_occupancy = {h: [] for h in all_slots}
-
+    
     current_user_email = st.session_state.get('user_email', '').strip().lower()
 
     for event in events:
-        if event['id'] == main_event['id']:
-            continue 
-            
-        start_str = event['start'].get('dateTime', event['start'].get('date'))
-        if 'T' not in start_str: continue
+        if event['id'] == main_event['id']: continue
         
-        dt_obj = datetime.datetime.fromisoformat(start_str)
-        dt_warsaw = dt_obj.astimezone(tz)
-        ev_hour = dt_warsaw.hour
+        start_str = event['start'].get('dateTime')
+        if not start_str: continue 
         
-        if ev_hour not in all_slots:
-            continue
+        dt_obj = datetime.datetime.fromisoformat(start_str).astimezone(tz)
+        ev_hour = dt_obj.hour
+        
+        if ev_hour not in all_slots: continue
 
-        desc = event.get('description', '')
         title = event.get('summary', '')
         
-        emails = []
-        if 'email:' in desc:
-            clean_desc = desc.replace('email:', '')
-            emails = [e.strip().lower() for e in clean_desc.split(',')]
-        else:
-            slot_occupancy[ev_hour] = "FULL"
-            continue
+        # --- NOWA LOGIKA: Identfikacja po tytule ---
+        found_emails, has_unknown = get_participants_from_title(title, df_users)
         
-        if current_user_email in emails:
+        # Czy ja tu jestem?
+        if current_user_email in found_emails:
             my_booked_hours.append(ev_hour)
             continue
-
-        count = len(emails)
-        if count >= 2:
+            
+        # Obliczamy zajętość
+        # Liczymy osoby z bazy + ewentualnie 1 osobę nieznaną (jeśli has_unknown=True)
+        people_count = len(found_emails) + (1 if has_unknown else 0)
+        
+        if people_count >= 2:
             slot_occupancy[ev_hour] = "FULL"
-        else:
+        elif people_count == 1:
+            # Jest 1 osoba (znana lub nieznana) -> Można dołączyć
             slot_occupancy[ev_hour] = title
+        else:
+            # Pusty slot w sensie nazwisk, ale istnieje event? (np. "Spotkanie")
+            # Dla bezpieczeństwa oznaczamy jako zajęte
+            slot_occupancy[ev_hour] = "FULL"
 
+    # Budujemy wynikowy słownik
     for h in all_slots:
         status = slot_occupancy[h]
+        if h in my_booked_hours: continue
+        if status == "FULL": continue
         
-        if h in my_booked_hours:
-            continue 
-
-        if status == "FULL":
-            continue 
-            
         if status == []:
             available_slots[h] = "Wolne"
         else:
@@ -279,27 +342,26 @@ def get_slots_for_day(date_obj):
     return available_slots, my_booked_hours
 
 def book_event(date_obj, hour, second_preacher_obj=None):
-    """Tworzy nowe wydarzenie LUB aktualizuje istniejące (dopisuje się)."""
+    """
+    Tworzy lub aktualizuje wydarzenie, operując na TYTULE (Imię Nazwisko).
+    Nie używa pola 'description' do przechowywania emaili.
+    """
     service = get_calendar_service()
     user_email = st.session_state['user_email']
     user_name = st.session_state['user_name']
-    tz = ZoneInfo("Europe/Warsaw")
-
+    
+    # Dane pomocnicze
     gender = st.session_state.get('user_gender', 'M')
-
     verb_signed = "zapisała" if gender == "K" else "zapisał"
     verb_joined = "dołączyła" if gender == "K" else "dołączył"
-
     style_b = 'style="color: #000000; font-weight: bold;"'
-    
-    if isinstance(date_obj, datetime.datetime):
-        d = date_obj.date()
-    else:
-        d = date_obj
-        
+
+    tz = ZoneInfo("Europe/Warsaw")
+    d = date_obj.date() if isinstance(date_obj, datetime.datetime) else date_obj
     start_dt = datetime.datetime.combine(d, datetime.time(hour, 0), tzinfo=tz)
     end_dt = start_dt + datetime.timedelta(hours=1)
     
+    # Pobieramy eventy w tym slocie
     events_existing = service.events().list(
         calendarId=CALENDAR_ID,
         timeMin=start_dt.isoformat(),
@@ -307,21 +369,22 @@ def book_event(date_obj, hour, second_preacher_obj=None):
         singleEvents=True
     ).execute().get('items', [])
     
+    # Szukamy eventu (musi mieć dateTime w start, żeby był eventem godzinowym)
     target_event = None
     for ev in events_existing:
-        if 'email:' in ev.get('description', ''):
+        if 'dateTime' in ev.get('start', {}):
              target_event = ev
              break
 
+    # --- SCENARIUSZ A: NOWE WYDARZENIE (INSERT) ---
     if not target_event:
         title = f"{user_name}"
-        desc = f"email:{user_email}"
+        # Opis zostawiamy pusty (clean look)
+        desc = ""
         
         if second_preacher_obj:
             sec_name = f"{second_preacher_obj['Imię']} {second_preacher_obj['Nazwisko']}"
-            sec_email = second_preacher_obj['Email']
             title += f" i {sec_name}"
-            desc += f", {sec_email}"
 
         event_body = {
             'summary': title,
@@ -332,6 +395,7 @@ def book_event(date_obj, hour, second_preacher_obj=None):
         try:
             service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
 
+            # Powiadomienie dla partnera (adres mamy z formularza)
             if second_preacher_obj:
                 subj = "Służba przy wózku - Nowy termin"
                 body = (f"Cześć!\n\n"
@@ -345,29 +409,36 @@ def book_event(date_obj, hour, second_preacher_obj=None):
             print(f"Błąd insert: {e}")
             return False
 
+    # --- SCENARIUSZ B: DOŁĄCZANIE (UPDATE) ---
     else:
         if second_preacher_obj:
-            st.error("Nie można dodać pary (2 osób) do slotu, w którym już ktoś jest. Wybierz pustą godzinę lub zapisz się sam.")
+            # Nie można dodać pary (2 osób) do slotu, w którym już ktoś jest
             return False
 
-        current_desc = target_event.get('description', '')
         current_title = target_event.get('summary', '')
-        organizer_email = current_desc.replace('email:', '').split(',')[0].strip()
         
-        emails = [e.strip() for e in current_desc.replace('email:', '').split(',')]
-        if len(emails) >= 2:
-            st.error("Ten termin został właśnie zajęty przez kogoś innego.")
+        # Sprawdzamy, czy w tytule już nie ma 2 osób (np. "Jan i Anna")
+        if re.search(r'\s+(?:i|\+|&)\s+', current_title):
+            # Slot jest już pełny
             return False
             
+        # Aktualizujemy tytuł
         new_title = f"{current_title} i {user_name}"
-        new_desc = f"{current_desc}, {user_email}"
-        
         target_event['summary'] = new_title
-        target_event['description'] = new_desc
+        # Opisu nie ruszamy (jeśli były tam notatki, to zostają)
         
         try:
             service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
-            if organizer_email:
+            
+            # --- POWIADOMIENIE DLA ORGANIZATORA ---
+            # Musimy znaleźć jego email na podstawie starego tytułu (current_title)
+            df_users = get_users_db()
+            organizer_emails, _ = get_participants_from_title(current_title, df_users)
+            
+            if organizer_emails:
+                # Zakładamy, że pierwszy znaleziony to organizator
+                organizer_email = organizer_emails[0]
+                
                 subj = "Służba przy wózku - Ktoś dołączył!"
                 body = (f"Cześć!\n\n"
                         f"{user_name} {verb_joined} do Ciebie do współpracy.\n"
@@ -375,157 +446,136 @@ def book_event(date_obj, hour, second_preacher_obj=None):
                         f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
                         f"Do zobaczenia!")
                 send_notification_email(organizer_email, subj, body)
+                
             return True
         except Exception as e:
             print(f"Błąd update: {e}")
             return False
 
 def cancel_booking(date_obj, hour, delete_entirely=False):
-    """
-    Usuwa użytkownika z wydarzenia i powiadamia grupę.
-    delete_entirely: Jeśli True i użytkownik jest organizatorem, usuwa całe wydarzenie (nawet z partnerem).
-    """
+    """Usuwa użytkownika z TYTUŁU, identyfikując go przez BAZĘ DANYCH (odporne na zmianę imienia)."""
     service = get_calendar_service()
-    user_email = st.session_state['user_email'].strip().lower()
-    user_name = st.session_state['user_name']
+    
+    # Dane z sesji
+    my_email = st.session_state['user_email'].strip().lower()
+    my_current_name = st.session_state['user_name'] # To może być nowe imię (np. "Danielek")
+    
     gender = st.session_state.get('user_gender', 'M')
-
     verb_canceled = "odwołała" if gender == "K" else "odwołał"
     verb_unsigned = "wypisała" if gender == "K" else "wypisał"
-
     style_b = 'style="color: #000000; font-weight: bold;"'
 
     tz = ZoneInfo("Europe/Warsaw")
-    
-    if isinstance(date_obj, datetime.datetime):
-        date_part = date_obj.date()
-    else:
-        date_part = date_obj
-        
-    start_dt = datetime.datetime.combine(date_part, datetime.time(hour, 0), tzinfo=tz)
+    d = date_obj.date() if isinstance(date_obj, datetime.datetime) else date_obj
+    start_dt = datetime.datetime.combine(d, datetime.time(hour, 0), tzinfo=tz)
     end_dt = start_dt + datetime.timedelta(hours=1)
     
+    # 1. Pobieramy event
     events = service.events().list(
-        calendarId=CALENDAR_ID, 
-        timeMin=start_dt.isoformat(), 
-        timeMax=end_dt.isoformat(), 
-        singleEvents=True
+        calendarId=CALENDAR_ID, timeMin=start_dt.isoformat(), timeMax=end_dt.isoformat(), singleEvents=True
     ).execute().get('items', [])
     
     target_event = None
     for ev in events:
-        if 'email:' in ev.get('description', ''):
+        if 'dateTime' in ev.get('start', {}):
              target_event = ev
              break
-             
-    if not target_event:
-        print("DEBUG: Nie znaleziono wydarzenia do anulowania.")
-        return False
-        
-    desc = target_event.get('description', '')
-    title = target_event.get('summary', '')
-    clean_desc = desc.replace('email:', '')
-    emails = [e.strip().lower() for e in clean_desc.split(',')]
+    if not target_event: return False
     
-    if user_email not in emails:
+    title = target_event.get('summary', '')
+    
+    # 2. ANALIZA TYTUŁU PRZEZ BAZĘ DANYCH
+    # Dzielimy tytuł na osoby (np. "Daniel Majewski", "Jarek Jantosz")
+    parts = re.split(r'\s+(?:i|\+|&)\s+', title)
+    
+    # Pobieramy bazę, żeby zidentyfikować kto jest kim
+    df_users = get_users_db()
+    
+    my_part_index = -1
+    
+    # Iterujemy po częściach tytułu i sprawdzamy, czy któraś pasuje do mojego EMAILA
+    for i, part in enumerate(parts):
+        # Używamy naszej mądrej funkcji, która sprawdza nazwisko + 2 litery imienia
+        found_emails, _ = get_participants_from_title(part, df_users)
+        
+        if my_email in found_emails:
+            my_part_index = i
+            break
+            
+    # Jeśli nie znaleziono po bazie (np. zmiana nazwiska tak drastyczna, że 2 litery nie pasują),
+    # próbujemy fallbackowo po starym string matching (dla bezpieczeństwa)
+    if my_part_index == -1:
+        my_name_norm = normalize_string(my_current_name)
+        for i, part in enumerate(parts):
+            if normalize_string(part) == my_name_norm:
+                my_part_index = i
+                break
+
+    if my_part_index == -1:
+        print(f"DEBUG: Nie udało się zidentyfikować '{my_email}' w tytule '{title}'")
         return False
 
+    # 3. WYCINAMY MNIE
+    # Lista pozostałych imion (jako stringi z tytułu)
+    remaining_names = [parts[i] for i in range(len(parts)) if i != my_part_index]
+    
+    # Funkcja do alertów
     def send_broadcast_alert(excluded_list):
-        others = get_emails_for_day(date_part, exclude_hour=hour, exclude_emails=excluded_list)
+        others = get_emails_for_day(d, exclude_hour=hour, exclude_emails=excluded_list)
         if others:
-            subj_alert = f"Służba przy wózku - Zmiana w grafiku ({date_part.strftime('%d-%m-%Y')})"
-            body_alert = (f"Cześć,\n\n"
-                          f"Informujemy o zmianie w grafiku w dniu, w którym pełnisz służbę.\n"
-                          f"Zwolniło się miejsce o godzinie:\n"
-                          f"<b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n")
+            subj = f"Służba przy wózku - Zmiana w grafiku ({d.strftime('%d-%m-%Y')})"
+            body = (f"Cześć,\n\nInformujemy o zmianie w grafiku.\nZwolniło się miejsce o godzinie:\n"
+                    f"<b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n")
             for recipient in others:
-                send_notification_email(recipient, subj_alert, body_alert)
+                send_notification_email(recipient, subj, body)
 
-    # SCENARIUSZ 1: Organizator (jest pierwszy)
-    if emails[0] == user_email:
-        has_partner = len(emails) > 1
+    # A. USUWANIE CAŁOŚCI
+    if (len(parts) == 1) or delete_entirely:
+        service.events().delete(calendarId=CALENDAR_ID, eventId=target_event['id']).execute()
         
-        # 1A. Jest sam -> Usuwa
-        if not has_partner:
-            service.events().delete(calendarId=CALENDAR_ID, eventId=target_event['id']).execute()
-            # Alert do innych (wykluczamy tylko mnie)
-            send_broadcast_alert([user_email])
-            return True
+        # Powiadomienie dla partnera (jeśli był)
+        if len(remaining_names) > 0:
+            partner_emails, _ = get_participants_from_title(remaining_names[0], df_users)
+            if partner_emails:
+                subj = "Służba przy wózku - Odwołano termin"
+                msg = f"Cześć,\n\n{my_current_name} {verb_canceled} Waszą służbę.\nData: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\nTermin usunięty."
+                send_notification_email(partner_emails[0], subj, msg)
+                send_broadcast_alert([my_email, partner_emails[0]])
+            else:
+                send_broadcast_alert([my_email])
+        else:
+            send_broadcast_alert([my_email])
             
-        # 1B. Ma partnera i usuwa całość
-        if has_partner and delete_entirely:
-            service.events().delete(calendarId=CALENDAR_ID, eventId=target_event['id']).execute()
-            
-            partner_email = emails[1]
-            subj = "Służba przy wózku - Odwołano termin"
-            body = (f"Cześć,\n\n"
-                    f"{user_name} {verb_canceled} Waszą służbę przy wózku.\n"
-                    f"Data: <b {style_b}>{date_part.strftime('%d-%m-%Y')}</b>\n"
-                    f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
-                    f"Termin został usunięty z grafiku.")
-            send_notification_email(partner_email, subj, body)
-            
-            # Alert do innych (wykluczamy mnie i partnera)
-            send_broadcast_alert([user_email, partner_email])
-            return True
-            
-        # 1C. Ma partnera i usuwa tylko siebie
-        if has_partner and not delete_entirely:
-            new_desc = f"email:{emails[1]}"
-            new_title = title
-            if ' i ' in title:
-                parts = title.split(' i ')
-                if len(parts) > 1:
-                    new_title = parts[1].strip()
-            
-            target_event['summary'] = new_title
-            target_event['description'] = new_desc
-            service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
-            
-            partner_email = emails[1]
-            subj = "Służba na wózku - Zmiana w grafiku"
-            body = (f"Cześć,\n\n"
-                    f"{user_name} {verb_unsigned} się z Waszego terminu.\n"
-                    f"Data: <b {style_b}>{date_part.strftime('%d-%m-%Y')}</b>\n"
-                    f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
-                    f"Twój termin jest otwarty na współpracę z innym głosicielem.")
-            send_notification_email(partner_email, subj, body)
-            return True
+        return True
 
-    # SCENARIUSZ 2: Partner (jest drugi)
-    elif len(emails) > 1 and emails[1] == user_email:
-        new_desc = f"email:{emails[0]}"
-        new_title = title
-        if ' i ' in title:
-            new_title = title.split(' i ')[0].strip()
-            
+    # B. USUWANIE TYLKO SIEBIE
+    else:
+        new_title = " i ".join(remaining_names)
         target_event['summary'] = new_title
-        target_event['description'] = new_desc
         service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
         
-        organizer_email = emails[0]
-        subj = "Służba na wózku - Zmiana w grafiku"
-        body = (f"Cześć,\n\n"
-                f"{user_name} {verb_unsigned} się z Waszego terminu.\n"
-                f"Data: <b {style_b}>{date_part.strftime('%d-%m-%Y')}</b>\n"
-                f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
-                f"Twój termin jest otwarty na współpracę z innym głosicielem.")
-        send_notification_email(organizer_email, subj, body)
-        return True
+        partner_emails, _ = get_participants_from_title(new_title, df_users)
+        if partner_emails:
+            subj = "Służba na wózku - Zmiana"
+            msg = f"Cześć,\n\n{my_current_name} {verb_unsigned} się.\nData: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\nZostałeś sam/a."
+            send_notification_email(partner_emails[0], subj, msg)
+            send_broadcast_alert([my_email, partner_emails[0]])
+        else:
+            send_broadcast_alert([my_email])
             
-    return False
+        return True
 
 def get_user_upcoming_events(days_ahead=30):
-    """Pobiera listę dyżurów od dzisiaj na 30 dni w przód."""
+    """Pobiera listę dyżurów od dzisiaj na 30 dni w przód (wg Imienia i Nazwiska)."""
     service = get_calendar_service()
-    user_email = st.session_state['user_email'].strip().lower()
+    my_email = st.session_state['user_email'].strip().lower()
     tz = ZoneInfo("Europe/Warsaw")
 
-    # 1. Start: Dzisiaj od północy (żeby pokazać też dzisiejsze dyżury)
+    # 1. Start: Dzisiaj od północy
     now = datetime.datetime.now(tz)
     start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # 2. Koniec: Dzisiaj + 30 dni (do końca dnia)
+    # 2. Koniec: Dzisiaj + 30 dni
     end_date = start_date + datetime.timedelta(days=days_ahead)
     end_date = end_date.replace(hour=23, minute=59, second=59)
 
@@ -539,22 +589,24 @@ def get_user_upcoming_events(days_ahead=30):
 
     events = events_result.get('items', [])
     my_events = []
+    
+    # Pobieramy bazę do identyfikacji
+    df_users = get_users_db()
 
     for event in events:
-        desc = event.get('description', '')
-        if 'email:' not in desc: continue
+        title = event.get('summary', '')
+        if not title: continue
+        
+        # --- NOWA LOGIKA: Parsowanie tytułu ---
+        found_emails, _ = get_participants_from_title(title, df_users)
 
-        clean_desc = desc.replace('email:', '')
-        emails = [e.strip().lower() for e in clean_desc.split(',')]
-
-        if user_email in emails:
+        if my_email in found_emails:
             start_str = event['start'].get('dateTime')
             if not start_str: continue 
             
             dt_obj = datetime.datetime.fromisoformat(start_str).astimezone(tz)
             date_str = dt_obj.strftime("%d-%m-%Y") 
             time_str = f"{dt_obj.hour}:00 - {dt_obj.hour + 1}:00"
-            title = event.get('summary', '')
 
             my_events.append({
                 "Data": date_str,
@@ -1171,6 +1223,7 @@ def main():
                 with st.spinner("Szukam Twoich terminów..."):
                     d = datetime.datetime.combine(cancel_date, datetime.time(0,0))
                     _, my_hours = get_slots_for_day(d)
+                    print(my_hours)
                 
                 if not my_hours:
                     st.info("Nie masz żadnych terminów w tym dniu.")
