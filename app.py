@@ -322,6 +322,9 @@ def get_slots_for_day(date_obj):
         
         found_emails, has_unknown = get_participants_from_title(title, df_users)
         
+        if not found_emails:
+            continue
+
         if current_user_email in found_emails:
             my_booked_hours.append(ev_hour)
             continue
@@ -332,8 +335,6 @@ def get_slots_for_day(date_obj):
             slot_occupancy[ev_hour] = "FULL"
         elif people_count == 1:
             slot_occupancy[ev_hour] = title
-        else:
-            slot_occupancy[ev_hour] = "FULL"
 
     for h in all_slots:
         status = slot_occupancy[h]
