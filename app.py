@@ -101,7 +101,38 @@ window.addEventListener('load', function() {
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- HELPERY DO IDENTYFIKACJI PO NAZWISKU ---
+def check_password():
+    """Obsługuje ekran logowania głównego (Globalne hasło)."""
+    ls = LocalStorage()
+    stored_auth = ls.getItem("wozki_auth_status")
+    
+    if st.session_state.get("password_correct", False) or stored_auth == "true":
+        st.session_state["password_correct"] = True
+        return True
+
+    # --- EKRAN LOGOWANIA ---
+    st.markdown("""
+        <style>
+        [data-testid="stAppHeader"], [data-testid="stSidebar"], [data-testid="stDecoration"] {
+            display: none !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    st.title("🔒 Dostęp do aplikacji")
+    password = st.text_input("Podaj hasło", type="password")
+    
+    if st.button("Zaloguj"):
+        if password == st.secrets["passwords"]["app_password"]:
+            st.session_state["password_correct"] = True
+            ls.setItem("wozki_auth_status", "true")
+            st.success("Hasło poprawne!")
+            time.sleep(0.5)
+            st.rerun()
+        else:
+            st.error("Błędne hasło")
+            
+    return False
 
 def normalize_string(s):
     """Pomocnicza: zamienia na małe litery i usuwa zbędne spacje."""
@@ -116,43 +147,31 @@ def get_participants_from_title(title, df_users):
     if not title:
         return [], False
         
-    # 1. Dzielimy tytuł na osoby (separatory: " i ", "+", "&", ",")
-    # Np. "Kowalski Jan i Nowak Danusia" -> ["Kowalski Jan", "Nowak Danusia"]
     parts = re.split(r'\s+(?:i|\+|&|,)\s+', title)
     
     found_emails = []
     has_unknown = False
-    
-    # Cache'ujemy dane z bazy dla szybkości (żeby nie robić .lower() w pętli tysiąc razy)
-    # Lista krotek: (email, nazwisko_low, imie_prefix_low, imie_low)
+
     users_data = []
     for _, row in df_users.iterrows():
         n = normalize_string(row['Nazwisko'])
         i = normalize_string(row['Imię'])
-        if n and i: # Pomijamy puste rekordy
+        if n and i:
             users_data.append({
                 'email': row['Email'].strip().lower(),
                 'last': n,
-                'first_2': i[:2], # Pierwsze 2 litery
-                'first_full': i   # Pełne imię (do debugowania lub ścisłego matchu)
+                'first_2': i[:2], 
+                'first_full': i 
             })
 
-    # 2. Analizujemy każdą "osobę" z tytułu
     for part in parts:
         clean_part = normalize_string(part)
-        
-        # Rozbijamy fragment na słowa, np. "nowak danusia" -> {"nowak", "danusia"}
-        # Używamy set/list słów, żeby uniknąć sytuacji, gdzie "Lis" pasuje do "Lisowski"
         part_words = re.findall(r'\w+', clean_part) 
         
         match_found = None
         
         for user in users_data:
-            # WARUNEK 1: Nazwisko musi być jednym ze słów w tytule
             if user['last'] in part_words:
-                
-                # WARUNEK 2: Któreś z POZOSTAŁYCH słów musi zaczynać się od 2 liter imienia
-                # Usuwamy nazwisko z listy słów do sprawdzenia imienia
                 other_words = [w for w in part_words if w != user['last']]
                 
                 for word in other_words:
@@ -166,12 +185,8 @@ def get_participants_from_title(title, df_users):
         if match_found:
             found_emails.append(match_found)
         else:
-            # Jeśli nie znaleziono w bazie, a fragment wygląda na nazwisko (nie jest pusty/cyfrą)
-            # Ignorujemy krótkie śmieci i same godziny (np. "12:00")
             if len(clean_part) > 2 and not re.search(r'\d:', clean_part):
                 has_unknown = True
-
-    # Usuwamy duplikaty (na wypadek dziwnych błędów)
     return list(set(found_emails)), has_unknown
 
 def make_sort_key(text):
@@ -274,7 +289,6 @@ def get_slots_for_day(date_obj):
     
     events = events_result.get('items', [])
     
-    # 1. Szukanie ram czasowych
     main_event = None
     start_h, end_h = None, None
     for event in events:
@@ -306,29 +320,21 @@ def get_slots_for_day(date_obj):
 
         title = event.get('summary', '')
         
-        # --- NOWA LOGIKA: Identfikacja po tytule ---
         found_emails, has_unknown = get_participants_from_title(title, df_users)
         
-        # Czy ja tu jestem?
         if current_user_email in found_emails:
             my_booked_hours.append(ev_hour)
             continue
             
-        # Obliczamy zajętość
-        # Liczymy osoby z bazy + ewentualnie 1 osobę nieznaną (jeśli has_unknown=True)
         people_count = len(found_emails) + (1 if has_unknown else 0)
         
         if people_count >= 2:
             slot_occupancy[ev_hour] = "FULL"
         elif people_count == 1:
-            # Jest 1 osoba (znana lub nieznana) -> Można dołączyć
             slot_occupancy[ev_hour] = title
         else:
-            # Pusty slot w sensie nazwisk, ale istnieje event? (np. "Spotkanie")
-            # Dla bezpieczeństwa oznaczamy jako zajęte
             slot_occupancy[ev_hour] = "FULL"
 
-    # Budujemy wynikowy słownik
     for h in all_slots:
         status = slot_occupancy[h]
         if h in my_booked_hours: continue
@@ -350,7 +356,6 @@ def book_event(date_obj, hour, second_preacher_obj=None):
     user_email = st.session_state['user_email']
     user_name = st.session_state['user_name']
     
-    # Dane pomocnicze
     gender = st.session_state.get('user_gender', 'M')
     verb_signed = "zapisała" if gender == "K" else "zapisał"
     verb_joined = "dołączyła" if gender == "K" else "dołączył"
@@ -361,7 +366,6 @@ def book_event(date_obj, hour, second_preacher_obj=None):
     start_dt = datetime.datetime.combine(d, datetime.time(hour, 0), tzinfo=tz)
     end_dt = start_dt + datetime.timedelta(hours=1)
     
-    # Pobieramy eventy w tym slocie
     events_existing = service.events().list(
         calendarId=CALENDAR_ID,
         timeMin=start_dt.isoformat(),
@@ -369,17 +373,14 @@ def book_event(date_obj, hour, second_preacher_obj=None):
         singleEvents=True
     ).execute().get('items', [])
     
-    # Szukamy eventu (musi mieć dateTime w start, żeby był eventem godzinowym)
     target_event = None
     for ev in events_existing:
         if 'dateTime' in ev.get('start', {}):
              target_event = ev
              break
 
-    # --- SCENARIUSZ A: NOWE WYDARZENIE (INSERT) ---
     if not target_event:
         title = f"{user_name}"
-        # Opis zostawiamy pusty (clean look)
         desc = ""
         
         if second_preacher_obj:
@@ -395,7 +396,6 @@ def book_event(date_obj, hour, second_preacher_obj=None):
         try:
             service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
 
-            # Powiadomienie dla partnera (adres mamy z formularza)
             if second_preacher_obj:
                 subj = "Służba przy wózku - Nowy termin"
                 body = (f"Cześć!\n\n"
@@ -409,34 +409,25 @@ def book_event(date_obj, hour, second_preacher_obj=None):
             print(f"Błąd insert: {e}")
             return False
 
-    # --- SCENARIUSZ B: DOŁĄCZANIE (UPDATE) ---
     else:
         if second_preacher_obj:
-            # Nie można dodać pary (2 osób) do slotu, w którym już ktoś jest
             return False
 
         current_title = target_event.get('summary', '')
         
-        # Sprawdzamy, czy w tytule już nie ma 2 osób (np. "Jan i Anna")
         if re.search(r'\s+(?:i|\+|&)\s+', current_title):
-            # Slot jest już pełny
             return False
             
-        # Aktualizujemy tytuł
         new_title = f"{current_title} i {user_name}"
         target_event['summary'] = new_title
-        # Opisu nie ruszamy (jeśli były tam notatki, to zostają)
         
         try:
             service.events().update(calendarId=CALENDAR_ID, eventId=target_event['id'], body=target_event).execute()
             
-            # --- POWIADOMIENIE DLA ORGANIZATORA ---
-            # Musimy znaleźć jego email na podstawie starego tytułu (current_title)
             df_users = get_users_db()
             organizer_emails, _ = get_participants_from_title(current_title, df_users)
             
             if organizer_emails:
-                # Zakładamy, że pierwszy znaleziony to organizator
                 organizer_email = organizer_emails[0]
                 
                 subj = "Służba przy wózku - Ktoś dołączył!"
@@ -456,9 +447,8 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
     """Usuwa użytkownika z TYTUŁU, identyfikując go przez BAZĘ DANYCH (odporne na zmianę imienia)."""
     service = get_calendar_service()
     
-    # Dane z sesji
     my_email = st.session_state['user_email'].strip().lower()
-    my_current_name = st.session_state['user_name'] # To może być nowe imię (np. "Danielek")
+    my_current_name = st.session_state['user_name']
     
     gender = st.session_state.get('user_gender', 'M')
     verb_canceled = "odwołała" if gender == "K" else "odwołał"
@@ -470,7 +460,6 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
     start_dt = datetime.datetime.combine(d, datetime.time(hour, 0), tzinfo=tz)
     end_dt = start_dt + datetime.timedelta(hours=1)
     
-    # 1. Pobieramy event
     events = service.events().list(
         calendarId=CALENDAR_ID, timeMin=start_dt.isoformat(), timeMax=end_dt.isoformat(), singleEvents=True
     ).execute().get('items', [])
@@ -484,26 +473,19 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
     
     title = target_event.get('summary', '')
     
-    # 2. ANALIZA TYTUŁU PRZEZ BAZĘ DANYCH
-    # Dzielimy tytuł na osoby (np. "Daniel Majewski", "Jarek Jantosz")
     parts = re.split(r'\s+(?:i|\+|&)\s+', title)
     
-    # Pobieramy bazę, żeby zidentyfikować kto jest kim
     df_users = get_users_db()
     
     my_part_index = -1
     
-    # Iterujemy po częściach tytułu i sprawdzamy, czy któraś pasuje do mojego EMAILA
     for i, part in enumerate(parts):
-        # Używamy naszej mądrej funkcji, która sprawdza nazwisko + 2 litery imienia
         found_emails, _ = get_participants_from_title(part, df_users)
         
         if my_email in found_emails:
             my_part_index = i
             break
             
-    # Jeśli nie znaleziono po bazie (np. zmiana nazwiska tak drastyczna, że 2 litery nie pasują),
-    # próbujemy fallbackowo po starym string matching (dla bezpieczeństwa)
     if my_part_index == -1:
         my_name_norm = normalize_string(my_current_name)
         for i, part in enumerate(parts):
@@ -515,11 +497,8 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
         print(f"DEBUG: Nie udało się zidentyfikować '{my_email}' w tytule '{title}'")
         return False
 
-    # 3. WYCINAMY MNIE
-    # Lista pozostałych imion (jako stringi z tytułu)
     remaining_names = [parts[i] for i in range(len(parts)) if i != my_part_index]
     
-    # Funkcja do alertów
     def send_broadcast_alert(excluded_list):
         others = get_emails_for_day(d, exclude_hour=hour, exclude_emails=excluded_list)
         if others:
@@ -529,11 +508,9 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
             for recipient in others:
                 send_notification_email(recipient, subj, body)
 
-    # A. USUWANIE CAŁOŚCI
     if (len(parts) == 1) or delete_entirely:
         service.events().delete(calendarId=CALENDAR_ID, eventId=target_event['id']).execute()
-        
-        # Powiadomienie dla partnera (jeśli był)
+
         if len(remaining_names) > 0:
             partner_emails, _ = get_participants_from_title(remaining_names[0], df_users)
             if partner_emails:
@@ -548,7 +525,6 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
             
         return True
 
-    # B. USUWANIE TYLKO SIEBIE
     else:
         new_title = " i ".join(remaining_names)
         target_event['summary'] = new_title
@@ -571,11 +547,9 @@ def get_user_upcoming_events(days_ahead=30):
     my_email = st.session_state['user_email'].strip().lower()
     tz = ZoneInfo("Europe/Warsaw")
 
-    # 1. Start: Dzisiaj od północy
     now = datetime.datetime.now(tz)
     start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # 2. Koniec: Dzisiaj + 30 dni
     end_date = start_date + datetime.timedelta(days=days_ahead)
     end_date = end_date.replace(hour=23, minute=59, second=59)
 
@@ -590,14 +564,12 @@ def get_user_upcoming_events(days_ahead=30):
     events = events_result.get('items', [])
     my_events = []
     
-    # Pobieramy bazę do identyfikacji
     df_users = get_users_db()
 
     for event in events:
         title = event.get('summary', '')
         if not title: continue
         
-        # --- NOWA LOGIKA: Parsowanie tytułu ---
         found_emails, _ = get_participants_from_title(title, df_users)
 
         if my_email in found_emails:
@@ -640,11 +612,8 @@ def send_notification_email(to_email, subject, body):
         msg['From'] = sender
         msg['To'] = to_email
 
-        # 1. Wersja tekstowa (dla starych klientów poczty)
         msg.set_content(body)
 
-        # 2. Wersja HTML (Ładna)
-        # Zamieniamy znaki nowej linii \n na <br> dla HTML
         html_body = body.replace('\n', '<br>')
         
         html_template = f"""
@@ -675,7 +644,6 @@ def send_notification_email(to_email, subject, body):
         </html>
         """
 
-        # Dodajemy wersję HTML jako alternatywę
         msg.add_alternative(html_template, subtype='html')
 
         with smtplib.SMTP_SSL(server_host, port) as server:
@@ -707,32 +675,25 @@ def sync_users_with_calendar():
 
         # 2. POBIERZ Z ARKUSZA
         df_sheet = get_users_db()
-        # Tworzymy kopię do porównań (żeby nie psuć oryginału)
         df_sheet['Email_Norm'] = df_sheet['Email'].astype(str).str.lower().str.strip()
         sheet_emails = set(df_sheet['Email_Norm'].unique())
         
-        # Ignoruj bota (żeby go nie usunąć, jeśli nie ma go w ACL kalendarza wprost)
         my_bot_email = dict(st.secrets["connections"]["gsheets"])["client_email"].lower()
         
-        # 3. PORÓWNANIE
         to_add = calendar_emails - sheet_emails
         to_remove = {e for e in (sheet_emails - calendar_emails) if e != my_bot_email}
         
         if not to_add and not to_remove:
             return True, "Bazy są zgodne."
 
-        # 4. ZASTOSOWANIE ZMIAN
-        
-        # Usuwanie
         if to_remove:
             df_sheet = df_sheet[~df_sheet['Email_Norm'].isin(to_remove)]
         
-        # Dodawanie
         new_rows = []
         for email in to_add:
             new_rows.append({
                 'Email': email,
-                'Rola': 'reader', # Domyślna rola
+                'Rola': 'reader',
                 'Typ': 'user',
                 'Imię': '',
                 'Nazwisko': '',
@@ -742,17 +703,14 @@ def sync_users_with_calendar():
             
         if new_rows:
             df_new = pd.DataFrame(new_rows)
-            # Jeśli df_sheet jest pusty, to po prostu df_new, inaczej concat
             if df_sheet.empty:
                 df_sheet = df_new
             else:
                 df_sheet = pd.concat([df_sheet, df_new], ignore_index=True)
         
-        # Sprzątanie kolumn pomocniczych
         if 'Email_Norm' in df_sheet.columns:
             del df_sheet['Email_Norm']
             
-        # 5. ZAPIS DO BAZY
         update_user_db(df_sheet)
         return True, f"Zaktualizowano! Dodano: {len(to_add)}, Usunięto: {len(to_remove)}"
 
@@ -785,11 +743,9 @@ def get_emails_for_day(date_obj, exclude_hour=None, exclude_emails=None):
         exclude_emails = []
         
     for event in events:
-        # Pomijamy eventy bez opisu (np. ramy czasowe)
         desc = event.get('description', '')
         if 'email:' not in desc: continue
         
-        # Jeśli podano exclude_hour, pomijamy tę godzinę (bo tam właśnie ktoś zrezygnował)
         start_str = event['start'].get('dateTime')
         if start_str:
             dt_obj = datetime.datetime.fromisoformat(start_str).astimezone(tz)
@@ -806,6 +762,10 @@ def get_emails_for_day(date_obj, exclude_hour=None, exclude_emails=None):
     return list(all_emails)
 
 def main():
+
+    if not check_password():
+        return
+
     ls = LocalStorage()
     
     # 1. POBIERANIE BAZY UŻYTKOWNIKÓW
@@ -820,8 +780,10 @@ def main():
         function disableKeyboardOnMobile() {
             const inputs = window.parent.document.querySelectorAll('div[data-baseweb="base-input"] input');
             inputs.forEach(input => {
-                input.setAttribute('readonly', 'readonly');
-                input.setAttribute('inputmode', 'none');
+                if(input.type !== 'password'){
+                    input.setAttribute('readonly', 'readonly');
+                    input.setAttribute('inputmode', 'none');
+                }
             });
         }
         setInterval(disableKeyboardOnMobile, 500);
@@ -841,17 +803,11 @@ def main():
     </script>
     """, height=0)
         
-    # --- CZYSZCZENIE DANYCH (Bez tworzenia kolumny Display) ---
-    # Upewniamy się, że imię i nazwisko to stringi
     df_users['Imię'] = df_users['Imię'].astype(str).str.strip()
     df_users['Nazwisko'] = df_users['Nazwisko'].astype(str).str.strip()
     
-    # Tworzymy pomocniczą listę stringów TYLKO do wyświetlania w UI
-    # Nie dodajemy jej do df_users na stałe
-    # Używamy zip, żeby iterować szybciej niż iterrows
     all_full_names = [f"{i} {n}" for i, n in zip(df_users['Imię'], df_users['Nazwisko'])]
 
-    # --- SILENT AUTO-LOGIN ---
     stored_email = ls.getItem(STORAGE_USER)
     
     if stored_email and not st.session_state.get('user_email'):
@@ -859,17 +815,13 @@ def main():
         if not user_match.empty:
             found_user = user_match.iloc[0]
             st.session_state['user_email'] = found_user['Email']
-            # Tutaj też łączymy imię i nazwisko tylko na potrzeby sesji
             st.session_state['user_name'] = f"{found_user['Imię']} {found_user['Nazwisko']}"
             st.session_state['user_role'] = found_user['Rola']
             st.session_state['user_gender'] = found_user.get('Płeć', 'M')
             st.rerun()
-
-    # --- SIDEBAR: LOGOWANIE ---
     
     pre_selected_index = None
     if 'user_name' in st.session_state:
-        # user_name w sesji ma format "Imię Nazwisko"
         current_full_name = st.session_state['user_name']
         try:
             pre_selected_index = all_full_names.index(current_full_name)
@@ -923,7 +875,7 @@ def main():
                 """
                 components.html(js_close_sidebar, height=0)
 
-                time.sleep(0.5) # Krótka pauza, żeby Toast zdążył mignąć
+                time.sleep(0.5)
                 st.rerun()
 
 
@@ -981,14 +933,10 @@ def main():
         if request_type == "Zapis":
             st.subheader("📅 Zapis na służbę przy wózku")
 
-            # --- DEFINICJE SVG (Data URI) ---
-            # 1. SZARE PUSTE (Brak)
             icon_empty_grey = "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z'%3E%3C/path%3E%3C/svg%3E"
             
-            # 2. FIOLETOWE PUSTE (Hover)
             icon_empty_purple = "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235d3b87' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z'%3E%3C/path%3E%3C/svg%3E"
             
-            # 3. FIOLETOWE PEŁNE (Ulubione)
             icon_filled_purple = "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%235d3b87' stroke='%235d3b87' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z'%3E%3C/path%3E%3C/svg%3E"
 
             st.markdown(f"""
@@ -1117,16 +1065,11 @@ def main():
                     second_preacher_name = st.selectbox("Drugi głosiciel", final_options)
                 
                 with c_btn:
-                    # --- WAŻNE: ZNACZNIK DLA CSS ---
-                    # To pozwala nam celować stylami TYLKO w ten jeden przycisk w tej kolumnie
                     st.markdown('<span id="heart-marker"></span>', unsafe_allow_html=True)
                     
                     selected_email = name_to_email_map.get(second_preacher_name)
                     
                     if selected_email:
-                        # LOGIKA PYTHON: Sprawdzamy listę ulubionych
-                        # type="primary" -> FIOLETOWE PEŁNE
-                        # type="secondary" -> SZARE PUSTE
                         
                         if selected_email in my_favorites:
                             if st.button(" ", type="primary", help="Usuń z ulubionych"):
@@ -1181,7 +1124,6 @@ def main():
                         st.warning("To jest nagłówek sekcji. Wybierz konkretną osobę z listy.")
                         can_proceed = False
                     
-                    # 2. Walidacja slotu (Twoja stara logika)
                     slot_status = available_slots[selected_hour]
                     is_joining = "Dołącz do" in slot_status
                     
@@ -1191,14 +1133,12 @@ def main():
                     elif is_joining and can_proceed:
                          st.info(f"ℹ️ Dołączasz do: {slot_status.replace('Dołącz do: ', '')}")
 
-                    # Przycisk
                     if st.button("✅ Zapisz się", disabled=not can_proceed):
                         with st.spinner("Zapisywanie..."):
                             d_booking = datetime.datetime.combine(selected_date, datetime.time(0,0))
                             
                             sec_data = None
                             if second_preacher_name != "Brak":
-                                # TU JUŻ NIE MUSIMY USUWAĆ GWIAZDEK, BO NAZWISKO JEST CZYSTE
                                 mask_sec = (df_users['Imię'] + ' ' + df_users['Nazwisko']) == second_preacher_name
                                 sec_match = df_users[mask_sec]
                                 if not sec_match.empty:
@@ -1223,7 +1163,6 @@ def main():
                 with st.spinner("Szukam Twoich terminów..."):
                     d = datetime.datetime.combine(cancel_date, datetime.time(0,0))
                     _, my_hours = get_slots_for_day(d)
-                    print(my_hours)
                 
                 if not my_hours:
                     st.info("Nie masz żadnych terminów w tym dniu.")
@@ -1284,14 +1223,28 @@ def main():
             st.error("⛔ Brak uprawnień do tej sekcji.")
             st.stop()
 
-        st.title("🛠️ Lista głosicieli")
+        st.title("🛠️ Ustawienia")
+
+        if not st.session_state.get("admin_unlocked", False):
+            admin_pass = st.text_input("Podaj hasło administratora", type="password", key="admin_pass_input")
+            
+            if st.button("Odblokuj"):
+                if admin_pass == st.secrets["passwords"]["admin_password"]:
+                    st.session_state["admin_unlocked"] = True
+                    st.success("Dostęp przyznany.")
+                    st.rerun()
+                else:
+                    st.error("Błędne hasło administratora.")
+            st.stop()
         
+        st.subheader("Lista głosicieli")
+
         if st.button("Odśwież dane", icon=":material/sync:"):
             with st.spinner("Synchronizuję z Kalendarzem Google..."):
                 success, msg = sync_users_with_calendar()
                 
                 if success:
-                    st.cache_data.clear() # Czyścimy cache Streamlit
+                    st.cache_data.clear()
                     
                     if "Zaktualizowano" in msg:
                         st.success(msg)
