@@ -119,7 +119,7 @@ def check_password():
         </style>
     """, unsafe_allow_html=True)
     
-    st.title("🔒 Dostęp do aplikacji")
+    st.title("Służba przy wózku 📝")
     password = st.text_input("Podaj hasło", type="password")
     
     if st.button("Zaloguj"):
@@ -516,7 +516,7 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
 
         partner_email_to_exclude = None
         partner_email_to_notify = None
-        
+
         if len(remaining_names) > 0:
             partner_name_str = remaining_names[0]
             partner_emails, _ = get_participants_from_title(partner_name_str, df_users)
