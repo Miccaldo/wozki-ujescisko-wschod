@@ -502,26 +502,42 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
     def send_broadcast_alert(excluded_list):
         others = get_emails_for_day(d, exclude_hour=hour, exclude_emails=excluded_list)
         if others:
-            subj = f"Służba przy wózku - Zmiana w grafiku ({d.strftime('%d-%m-%Y')})"
-            body = (f"Cześć,\n\nInformujemy o zmianie w grafiku.\nZwolniło się miejsce o godzinie:\n"
-                    f"<b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n")
+            subj = f"Służba przy wózku - Zmiana w grafiku"
+            body = (f"Cześć!\n\n"
+                    f"Zwolniło się miejsce w dniu, w którym pełnisz służbę.\n"
+                    f"Data: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\n"
+                    f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
+                    f"Zachęcamy do zapoznania się z kalendarzem po aktualizacji.")
             for recipient in others:
                 send_notification_email(recipient, subj, body)
 
     if (len(parts) == 1) or delete_entirely:
         service.events().delete(calendarId=CALENDAR_ID, eventId=target_event['id']).execute()
 
+        partner_email_to_exclude = None
+        partner_email_to_notify = None
+        
         if len(remaining_names) > 0:
-            partner_emails, _ = get_participants_from_title(remaining_names[0], df_users)
+            partner_name_str = remaining_names[0]
+            partner_emails, _ = get_participants_from_title(partner_name_str, df_users)
+            
             if partner_emails:
+                partner_email_to_notify = partner_emails[0]
+                
                 subj = "Służba przy wózku - Odwołano termin"
-                msg = f"Cześć,\n\n{my_current_name} {verb_canceled} Waszą służbę.\nData: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\nTermin usunięty."
-                send_notification_email(partner_emails[0], subj, msg)
-                send_broadcast_alert([my_email, partner_emails[0]])
-            else:
-                send_broadcast_alert([my_email])
-        else:
-            send_broadcast_alert([my_email])
+                msg = (f"Cześć,\n\n"
+                        f"{my_current_name} {verb_canceled} Waszą służbę przy wózku.\n"
+                        f"Data: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\n"
+                        f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
+                        f"Termin został usunięty z grafiku.")
+                send_notification_email(partner_email_to_notify, subj, msg)
+
+        # Alert do grupy
+        exclude_list = [my_email]
+        if partner_email_to_notify:
+             exclude_list.append(partner_email_to_notify)
+             
+        send_broadcast_alert(exclude_list)
             
         return True
 
@@ -532,12 +548,13 @@ def cancel_booking(date_obj, hour, delete_entirely=False):
         
         partner_emails, _ = get_participants_from_title(new_title, df_users)
         if partner_emails:
-            subj = "Służba na wózku - Zmiana"
-            msg = f"Cześć,\n\n{my_current_name} {verb_unsigned} się.\nData: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\nZostałeś sam/a."
+            subj = "Służba przy wózku - Zmiana w grafiku"
+            msg = (f"Cześć!\n\n"
+                    f"{my_current_name} {verb_unsigned} się z Waszego terminu.\n"
+                    f"Data: <b {style_b}>{d.strftime('%d-%m-%Y')}</b>\n"
+                    f"Godzina: <b {style_b}>{hour}:00 - {hour+1}:00</b>\n\n"
+                    f"Twój termin jest otwarty na współpracę z innym głosicielem.")
             send_notification_email(partner_emails[0], subj, msg)
-            send_broadcast_alert([my_email, partner_emails[0]])
-        else:
-            send_broadcast_alert([my_email])
             
         return True
 
@@ -718,7 +735,7 @@ def sync_users_with_calendar():
         return False, f"Błąd synchronizacji: {e}"
 
 def get_emails_for_day(date_obj, exclude_hour=None, exclude_emails=None):
-    """Pobiera listę emaili wszystkich osób, które mają dyżur w tym dniu."""
+    """Pobiera emaile innych osób dyżurujących tego dnia (identyfikacja po Tytule)."""
     service = get_calendar_service()
     tz = ZoneInfo("Europe/Warsaw")
     
@@ -737,29 +754,28 @@ def get_emails_for_day(date_obj, exclude_hour=None, exclude_emails=None):
         singleEvents=True
     ).execute().get('items', [])
     
-    all_emails = set()
+    unique_emails = set()
+    if exclude_emails is None: exclude_emails = []
     
-    if exclude_emails is None:
-        exclude_emails = []
-        
+    df_users = get_users_db()
+    
     for event in events:
-        desc = event.get('description', '')
-        if 'email:' not in desc: continue
-        
         start_str = event['start'].get('dateTime')
-        if start_str:
-            dt_obj = datetime.datetime.fromisoformat(start_str).astimezone(tz)
-            if exclude_hour is not None and dt_obj.hour == exclude_hour:
-                continue
-
-        clean_desc = desc.replace('email:', '')
-        emails = [e.strip().lower() for e in clean_desc.split(',')]
+        if not start_str: continue
         
-        for e in emails:
+        dt_obj = datetime.datetime.fromisoformat(start_str).astimezone(tz)
+        if exclude_hour is not None and dt_obj.hour == exclude_hour:
+            continue
+
+        title = event.get('summary', '')
+        
+        found_emails, _ = get_participants_from_title(title, df_users)
+        
+        for e in found_emails:
             if e not in exclude_emails:
-                all_emails.add(e)
+                unique_emails.add(e)
                 
-    return list(all_emails)
+    return list(unique_emails)
 
 def main():
 
@@ -1188,12 +1204,12 @@ def main():
                     ).execute().get('items', [])
                     
                     for ev in check_events:
-                        if 'email:' in ev.get('description', ''):
-                            desc = ev.get('description', '')
-                            emails = [e.strip().lower() for e in desc.replace('email:', '').split(',')]
-                            if emails and emails[0] == st.session_state['user_email']:
-                                if len(emails) > 1:
-                                    show_delete_all_option = True
+                        title = ev.get('summary', '')
+                        found_emails, _ = get_participants_from_title(title, df_users)
+                        
+                        if st.session_state['user_email'] in found_emails:
+                            if len(found_emails) > 1:
+                                show_delete_all_option = True
                             break
                     
                     delete_entirely = False
