@@ -778,6 +778,42 @@ def get_emails_for_day(date_obj, exclude_hour=None, exclude_emails=None):
                 
     return list(unique_emails)
 
+@st.dialog("Potwierdzenie tożsamości")
+def login_dialog(user_row, ls):
+    """Wyświetla okno modalne z potwierdzeniem logowania."""
+    st.write(f"Czy nazywasz się:")
+    st.markdown(f"### {user_row['Imię']} {user_row['Nazwisko']}?")
+    
+    col1, col2 = st.columns(2)
+    
+    if col1.button("Tak, kontynuuj", type="primary", use_container_width=True):
+        # --- LOGIKA LOGOWANIA (Przeniesiona z main) ---
+        st.session_state.update({
+            'user_email': user_row['Email'], 
+            'user_name': f"{user_row['Imię']} {user_row['Nazwisko']}", 
+            'user_role': user_row['Rola'], 
+            'user_gender': user_row.get('Płeć', 'M')
+        })
+        # Czyścimy cache
+        if 'available_slots_cache' in st.session_state:
+            del st.session_state['available_slots_cache']
+        if 'last_fetched_date' in st.session_state:
+            del st.session_state['last_fetched_date']
+        # Resetujemy formularz
+        st.session_state['request_type_radio'] = "Zapis"
+        # Zapisujemy w przeglądarce
+        ls.setItem(STORAGE_USER, user_row['Email'])
+
+        st.session_state['just_logged_in'] = True
+        
+        # 5. Natychmiastowy restart (bez rysowania toasta w modalu)
+        st.rerun()
+        
+    if col2.button("Nie, powrót", use_container_width=True):
+        # Resetujemy wybór w selectboxie (ustawiamy index na None)
+        st.session_state["login_selector_key"] = None
+        st.rerun()
+
 def main():
 
     if not check_password():
@@ -851,8 +887,26 @@ def main():
         "Wybierz siebie z listy", 
         all_full_names, 
         index=pre_selected_index, 
-        placeholder="Kliknij, aby wybrać..."
+        placeholder="Kliknij, aby wybrać...",
+        key="login_selector_key"
     )
+
+    if st.session_state.get('just_logged_in'):
+        st.toast(f"Zalogowano: {st.session_state['user_name']}", icon="✅")
+        
+        components.html("""
+        <script>
+            setTimeout(function() {
+                const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+                const btn = window.parent.document.querySelector('[data-testid="stBaseButton-headerNoPadding"]');
+                if(sidebar && btn && sidebar.getAttribute('aria-expanded') === "true") {
+                    btn.click();
+                }
+            }, 300);
+        </script>
+        """, height=0)
+        
+        del st.session_state['just_logged_in']
     
     # OBSŁUGA WYBORU UŻYTKOWNIKA
     if selected_full_name:
@@ -864,38 +918,12 @@ def main():
             new_email = user_data['Email']
 
             if st.session_state.get('user_email') != new_email:
-                st.session_state['user_email'] = new_email
-                st.session_state['user_name'] = f"{user_data['Imię']} {user_data['Nazwisko']}"
-                st.session_state['user_role'] = user_data['Rola']
-                st.session_state['user_gender'] = user_data.get('Płeć', 'M')
+                login_dialog(user_data, ls)
+                st.title("Służba przy wózku 📝")
+                st.caption("Gdańsk Ujeścisko - Wschód")
+                st.info("⬅️ Potwierdź swoją tożsamość w oknie.")
+                st.stop()
                 
-                if 'available_slots_cache' in st.session_state:
-                    del st.session_state['available_slots_cache']
-                if 'last_fetched_date' in st.session_state:
-                    del st.session_state['last_fetched_date']
-
-                st.session_state['request_type_radio'] = "Zapis"
-                ls.setItem(STORAGE_USER, new_email)
-                st.toast(f"Zalogowano: {st.session_state['user_name']}", icon="✅")
-                
-                timestamp = int(time.time())
-                js_close_sidebar = f"""
-                <script>
-                    setTimeout(function() {{
-                        const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
-                        const toggleBtn = window.parent.document.querySelector('[data-testid="stBaseButton-headerNoPadding"]');
-                        if (sidebar && toggleBtn && sidebar.getAttribute('aria-expanded') === "true") {{
-                            toggleBtn.click();
-                        }}
-                    }}, 200); 
-                </script>
-                """
-                components.html(js_close_sidebar, height=0)
-
-                time.sleep(0.5)
-                st.rerun()
-
-
     # OBSŁUGA WYLOGOWANIA
     elif selected_full_name is None:
         if 'user_email' in st.session_state:
