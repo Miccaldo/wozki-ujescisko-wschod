@@ -781,12 +781,15 @@ def get_emails_for_day(date_obj, exclude_hour=None, exclude_emails=None):
 @st.dialog("Potwierdzenie tożsamości")
 def login_dialog(user_row, ls):
     """Wyświetla okno modalne z potwierdzeniem logowania."""
-    st.write(f"Czy nazywasz się:")
-    st.markdown(f"### {user_row['Imię']} {user_row['Nazwisko']}?")
+    st.markdown(f"Czy nazywasz się **{user_row['Imię']} {user_row['Nazwisko']}**?")
     
     col1, col2 = st.columns(2)
     
-    if col1.button("Tak, kontynuuj", type="primary", use_container_width=True):
+    if col1.button("Powrót", use_container_width=True, type="primary"):
+        # Resetujemy wybór w selectboxie (ustawiamy index na None)
+        st.session_state["login_selector_key"] = None
+        st.rerun()
+    if col2.button("Kontynuuj", type="primary", use_container_width=True):
         # --- LOGIKA LOGOWANIA (Przeniesiona z main) ---
         st.session_state.update({
             'user_email': user_row['Email'], 
@@ -807,11 +810,6 @@ def login_dialog(user_row, ls):
         st.session_state['just_logged_in'] = True
         
         # 5. Natychmiastowy restart (bez rysowania toasta w modalu)
-        st.rerun()
-        
-    if col2.button("Nie, powrót", use_container_width=True):
-        # Resetujemy wybór w selectboxie (ustawiamy index na None)
-        st.session_state["login_selector_key"] = None
         st.rerun()
 
 def main():
